@@ -322,8 +322,11 @@ export function updateFaceSuggestionsAcrossTree(persons: Person[]): {
 
 /**
  * Synchronize photos across all tagged persons' mediaFiles.
- * If Person A has a photo where Person B and Person C are tagged in faces,
- * both Person B and Person C will automatically have this photo attached to their card as well.
+ * If a photo has faces tagged with specific person(s):
+ * - It is attached ONLY to those tagged persons' cards.
+ * - If a person is NOT selected/tagged on the photo, the photo is NOT kept on that person's card.
+ * If a photo has NO persons tagged yet (e.g. untagged upload, document):
+ * - It remains with the uploader (originPersonId).
  */
 export function syncTaggedMediaAcrossPersons(persons: Person[]): Person[] {
   // Map of mediaId -> latest merged media item
@@ -382,41 +385,62 @@ export function syncTaggedMediaAcrossPersons(persons: Person[]): Person[] {
     });
   });
 
-  // Second pass: ensure every tagged person has this photo attached to their card
+  // Second pass: ensure every tagged person has this photo attached to their card,
+  // and remove photos from persons who are NOT tagged on them.
   return persons.map((person) => {
-    const existingMedia = person.mediaFiles ? [...person.mediaFiles] : [];
-    const existingMediaMap = new Map(existingMedia.map((m) => [m.id, m]));
+    const rawExistingMedia = person.mediaFiles ? [...person.mediaFiles] : [];
     let hasChanges = false;
 
-    // Check all media across the family tree
+    // Filter existing media: if photo has tagged people, keep ONLY if this person is tagged!
+    const filteredExistingMedia = rawExistingMedia.filter((m) => {
+      const canonical = allMediaMap.get(m.id) || m;
+      const taggedSet = taggedPersonsPerMedia.get(m.id);
+
+      if (taggedSet && taggedSet.size > 0) {
+        // Photo has explicitly tagged persons: keep ONLY if this person is one of them
+        return taggedSet.has(person.id);
+      }
+
+      // If photo has NO tagged persons at all (e.g. document, unanalyzed photo):
+      // Keep only on the card of the person who uploaded/owns it
+      const origin = canonical.originPersonId || m.originPersonId;
+      return !origin || origin === person.id;
+    });
+
+    if (filteredExistingMedia.length !== rawExistingMedia.length) {
+      hasChanges = true;
+    }
+
+    const currentMediaMap = new Map(filteredExistingMedia.map((m) => [m.id, m]));
+    const nextMediaList: MediaItem[] = [];
+
+    // Update existing items with latest canonical data (e.g. merged faces)
+    filteredExistingMedia.forEach((m) => {
+      const canonical = allMediaMap.get(m.id);
+      if (canonical && JSON.stringify(m.faces) !== JSON.stringify(canonical.faces)) {
+        nextMediaList.push({ ...canonical });
+        hasChanges = true;
+      } else {
+        nextMediaList.push(canonical ? { ...canonical } : m);
+      }
+    });
+
+    // Attach any photos across the tree where this person IS tagged but doesn't have it yet
     allMediaMap.forEach((canonicalMedia, mediaId) => {
       const taggedSet = taggedPersonsPerMedia.get(mediaId);
       const isTagged = taggedSet && taggedSet.has(person.id);
 
-      if (isTagged) {
-        if (!existingMediaMap.has(mediaId)) {
-          // Person is tagged on this photo, but doesn't have it yet -> Attach photo to this person!
-          existingMedia.push(canonicalMedia);
-          existingMediaMap.set(mediaId, canonicalMedia);
-          hasChanges = true;
-        } else {
-          // Photo already present: check if faces need updating
-          const current = existingMediaMap.get(mediaId)!;
-          if (JSON.stringify(current.faces) !== JSON.stringify(canonicalMedia.faces)) {
-            const idx = existingMedia.findIndex((m) => m.id === mediaId);
-            if (idx >= 0) {
-              existingMedia[idx] = { ...current, faces: canonicalMedia.faces };
-              hasChanges = true;
-            }
-          }
-        }
+      if (isTagged && !currentMediaMap.has(mediaId)) {
+        nextMediaList.push({ ...canonicalMedia });
+        currentMediaMap.set(mediaId, canonicalMedia);
+        hasChanges = true;
       }
     });
 
     if (hasChanges) {
       return {
         ...person,
-        mediaFiles: existingMedia,
+        mediaFiles: nextMediaList,
         updatedAt: Date.now()
       };
     }

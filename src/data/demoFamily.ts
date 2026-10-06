@@ -47,7 +47,8 @@ export const EMPTY_TREE_DATA: FamilyTreeData = {
   version: 1,
   lastModified: Date.now(),
   persons: [],
-  relationships: []
+  relationships: [],
+  mediaArchive: []
 };
 
 export const INITIAL_DEMO_DATA: FamilyTreeData = {

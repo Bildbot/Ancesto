@@ -1,4 +1,4 @@
-import { FamilyTreeData, Person, RelationshipRecord } from '../types/genealogy';
+import { FamilyTreeData, Person, RelationshipRecord, MediaItem } from '../types/genealogy';
 import { EMPTY_TREE_DATA, INITIAL_DEMO_DATA } from '../data/demoFamily';
 
 const DB_NAME = 'genealogy_heritage_db';
@@ -70,9 +70,27 @@ export function normalizeTreeData(data: FamilyTreeData): FamilyTreeData {
     }
   });
 
+  // Collect master media archive pool
+  const masterMediaMap = new Map<string, MediaItem>();
+  if (Array.isArray(data.mediaArchive)) {
+    data.mediaArchive.forEach((m) => masterMediaMap.set(m.id, m));
+  }
+  if (Array.isArray(data.persons)) {
+    data.persons.forEach((p) => {
+      if (Array.isArray(p.mediaFiles)) {
+        p.mediaFiles.forEach((m) => {
+          if (!masterMediaMap.has(m.id)) {
+            masterMediaMap.set(m.id, m);
+          }
+        });
+      }
+    });
+  }
+
   return {
     ...data,
-    relationships: normalizedRels
+    relationships: normalizedRels,
+    mediaArchive: Array.from(masterMediaMap.values())
   };
 }
 
@@ -274,6 +292,7 @@ export function validateImportedData(raw: unknown): FamilyTreeData | null {
     description: typeof obj.description === 'string' ? obj.description : '',
     persons: obj.persons as Person[],
     relationships: obj.relationships as RelationshipRecord[],
+    mediaArchive: Array.isArray(obj.mediaArchive) ? (obj.mediaArchive as MediaItem[]) : [],
     version: 1,
     lastModified: Date.now()
   };

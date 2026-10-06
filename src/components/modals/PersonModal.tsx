@@ -41,10 +41,13 @@ import {
   Film,
   FileCheck,
   Scan,
-  UserCheck
+  UserCheck,
+  FolderPlus,
+  Unlink
 } from 'lucide-react';
 import { PhotoFaceViewer } from '../media/PhotoFaceViewer';
 import { extractBestFaceAvatar } from '../../services/faceRecognition';
+import { AttachMediaModal } from './AttachMediaModal';
 
 export const RELATIONSHIP_ROLE_PRESETS: { role: RelativeRole; label: string; badgeLabel: string }[] = [
   { role: 'parent', label: 'Родитель для... (отец / мать)', badgeLabel: 'Родитель для' },
@@ -70,6 +73,8 @@ interface PersonModalProps {
   onOpenPerson?: (personId: string) => void;
   defaultRelationshipTargetId?: string;
   defaultRelationshipRole?: RelativeRole;
+  mediaArchive?: MediaItem[];
+  onNavigateToArchive?: () => void;
   onDeleteRelationship?: (person1Id: string, person2Id: string, type?: RelationshipType, relationshipId?: string) => void;
 }
 
@@ -83,6 +88,8 @@ export const PersonModal: React.FC<PersonModalProps> = ({
   onDelete,
   allPersons,
   relationships,
+  mediaArchive = [],
+  onNavigateToArchive,
   onOpenPerson,
   defaultRelationshipTargetId,
   defaultRelationshipRole,
@@ -92,6 +99,7 @@ export const PersonModal: React.FC<PersonModalProps> = ({
 
   // Active tab
   const [activeTab, setActiveTab] = useState<TabType>('general');
+  const [isAttachModalOpen, setIsAttachModalOpen] = useState(false);
   const [confirmDeleteRel, setConfirmDeleteRel] = useState<{
     targetId: string;
     targetName: string;
@@ -1325,29 +1333,36 @@ export const PersonModal: React.FC<PersonModalProps> = ({
                     Медиафайлы и архивные документы
                   </h3>
                   <p className="text-xs text-stone-500">
-                    Загружайте фотографии, сканы метрических книг, справок, наградных листов, видео и аудио.
+                    Прикрепленные материалы из общего медиаархива семьи.
                   </p>
                 </div>
-                <label className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-stone-900 text-stone-100 hover:bg-stone-800 cursor-pointer transition shadow-xs whitespace-nowrap">
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Загрузить файлы</span>
-                  <input
-                    type="file"
-                    multiple
-                    accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsAttachModalOpen(true)}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 transition shadow-xs whitespace-nowrap"
+                >
+                  <FolderPlus className="w-3.5 h-3.5" />
+                  <span>+ Прикрепить из архива</span>
+                </button>
               </div>
 
               {mediaFiles.length === 0 ? (
                 <div className="text-center py-10 px-4 rounded-xl border border-dashed border-stone-300 bg-white">
                   <ImageIcon className="w-10 h-10 mx-auto text-stone-300 mb-2" />
                   <p className="text-xs font-medium text-stone-700">Нет прикрепленных медиафайлов</p>
-                  <p className="text-xs text-stone-400 mt-1 max-w-sm mx-auto">
-                    Вы можете прикрепить любые файлы с вашего компьютера или телефона. Они сохраняются в локальном архиве браузера.
+                  <p className="text-xs text-stone-400 mt-1 max-w-sm mx-auto leading-relaxed">
+                    Все материалы загружаются через центральный раздел «Медиаархив». Здесь вы можете выбрать нужные файлы для этой персоны.
                   </p>
+                  <div className="mt-4 flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsAttachModalOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-amber-600 text-white hover:bg-amber-700 text-xs font-semibold shadow-xs transition"
+                    >
+                      <FolderPlus className="w-3.5 h-3.5" />
+                      <span>Выбрать из медиаархива</span>
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -1447,10 +1462,11 @@ export const PersonModal: React.FC<PersonModalProps> = ({
                             setMediaFiles((prev) => prev.filter((m) => m.id !== media.id));
                             if (avatarUrl === media.dataUrl) setAvatarUrl('');
                           }}
-                          className="text-stone-400 hover:text-red-600 p-1 ml-auto"
-                          title="Удалить файл"
+                          className="text-stone-400 hover:text-rose-600 p-1 ml-auto flex items-center gap-1 text-[11px]"
+                          title="Открепить от персоны (файл останется в архиве)"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Unlink className="w-3.5 h-3.5" />
+                          <span>Открепить</span>
                         </button>
                       </div>
                     </div>
@@ -1556,6 +1572,52 @@ export const PersonModal: React.FC<PersonModalProps> = ({
               </div>
             </div>
           </div>
+        )}
+        {/* Attach Media from Archive Modal */}
+        {isAttachModalOpen && (
+          <AttachMediaModal
+            isOpen={isAttachModalOpen}
+            onClose={() => setIsAttachModalOpen(false)}
+            targetPerson={{
+              id: person?.id || 'temp-new-person',
+              firstName: firstName || 'Новая персона',
+              lastName: lastName || '',
+              gender,
+              isDeceased,
+              bio: '',
+              significantDates: [],
+              mediaFiles: [],
+              tags: [],
+              createdAt: Date.now(),
+              updatedAt: Date.now()
+            }}
+            allPersons={allPersons}
+            mediaArchive={(() => {
+              const map = new Map<string, MediaItem>();
+              mediaArchive.forEach((m) => map.set(m.id, m));
+              mediaFiles.forEach((m) => map.set(m.id, m));
+              allPersons.forEach((p) => p.mediaFiles?.forEach((m) => map.set(m.id, m)));
+              return Array.from(map.values());
+            })()}
+            currentlyAttachedIds={mediaFiles.map((m) => m.id)}
+            onSaveAttachments={(selectedIds) => {
+              const pool = new Map<string, MediaItem>();
+              mediaArchive.forEach((m) => pool.set(m.id, m));
+              mediaFiles.forEach((m) => pool.set(m.id, m));
+              allPersons.forEach((p) => p.mediaFiles?.forEach((m) => pool.set(m.id, m)));
+              const nextList: MediaItem[] = [];
+              selectedIds.forEach((id) => {
+                const item = pool.get(id);
+                if (item) nextList.push({ ...item });
+              });
+              setMediaFiles(nextList);
+            }}
+            onNavigateToArchive={() => {
+              setIsAttachModalOpen(false);
+              onClose();
+              if (onNavigateToArchive) onNavigateToArchive();
+            }}
+          />
         )}
       </div>
     </div>

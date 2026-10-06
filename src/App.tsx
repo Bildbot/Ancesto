@@ -6,7 +6,8 @@ import {
   ActiveView, 
   RelationshipType,
   RelativeRole,
-  PendingRelationship
+  PendingRelationship,
+  MediaItem
 } from './types/genealogy';
 import { EMPTY_TREE_DATA, INITIAL_DEMO_DATA } from './data/demoFamily';
 import { loadFamilyTree, saveFamilyTree } from './services/db';
@@ -59,9 +60,15 @@ export default function App() {
   useEffect(() => {
     loadFamilyTree()
       .then((data) => {
-        setTreeData(data);
-        // Persist normalized data so any legacy child-type records are immediately upgraded in storage
-        saveFamilyTree(data);
+        // Automatically synchronize media across tagged persons and clean up any unlinked media
+        const syncedPersons = syncTaggedMediaAcrossPersons(data.persons);
+        const normalizedData: FamilyTreeData = {
+          ...data,
+          persons: syncedPersons
+        };
+        setTreeData(normalizedData);
+        // Persist normalized data so any legacy child-type records and mislinked media are immediately upgraded in storage
+        saveFamilyTree(normalizedData);
         setIsLoading(false);
       })
       .catch((err) => {
@@ -249,6 +256,34 @@ export default function App() {
     setInspectedPersonId(personId);
   };
 
+  // Master media archive operations
+  const handleAddMediaToArchive = useCallback((newItems: MediaItem[]) => {
+    const currentArchive = treeData.mediaArchive ? [...treeData.mediaArchive] : [];
+    const existingIds = new Set(currentArchive.map((m) => m.id));
+    const toAdd = newItems.filter((m) => !existingIds.has(m.id));
+    const nextArchive = [...currentArchive, ...toAdd];
+    updateTreeData({
+      ...treeData,
+      mediaArchive: nextArchive
+    });
+  }, [treeData, updateTreeData]);
+
+  const handleDeleteMediaFromArchive = useCallback((mediaId: string) => {
+    const nextArchive = (treeData.mediaArchive || []).filter((m) => m.id !== mediaId);
+    const nextPersons = treeData.persons.map((p) => {
+      if (!p.mediaFiles || !p.mediaFiles.some((m) => m.id === mediaId)) return p;
+      return {
+        ...p,
+        mediaFiles: p.mediaFiles.filter((m) => m.id !== mediaId)
+      };
+    });
+    updateTreeData({
+      ...treeData,
+      mediaArchive: nextArchive,
+      persons: nextPersons
+    });
+  }, [treeData, updateTreeData]);
+
   // Focus person in tree
   const handleFocusInTree = (personId: string) => {
     setTreeFocusedPersonId(personId);
@@ -424,7 +459,10 @@ export default function App() {
         {activeView === 'archive' && (
           <ArchiveMediaView
             persons={treeData.persons}
+            mediaArchive={treeData.mediaArchive || []}
             onSelectPerson={handleSelectPerson}
+            onAddMediaToArchive={handleAddMediaToArchive}
+            onDeleteMediaFromArchive={handleDeleteMediaFromArchive}
             onUpdatePersons={(updatedPersons) => {
               updateTreeData({
                 ...treeData,
@@ -513,6 +551,8 @@ export default function App() {
           onSelectPerson={handleSelectPerson}
           allPersons={treeData.persons}
           relationships={treeData.relationships}
+          mediaArchive={treeData.mediaArchive || []}
+          onNavigateToArchive={() => setActiveView('archive')}
           onFocusInTree={handleFocusInTree}
           onDeleteRelationship={handleDeleteRelationship}
           onUpdatePerson={(updatedPerson) => {
@@ -550,6 +590,8 @@ export default function App() {
           onDelete={handleDeletePerson}
           allPersons={treeData.persons}
           relationships={treeData.relationships}
+          mediaArchive={treeData.mediaArchive || []}
+          onNavigateToArchive={() => setActiveView('archive')}
           onOpenPerson={handleSelectPerson}
           defaultRelationshipTargetId={defaultRelativeTargetId}
           defaultRelationshipRole={defaultRelativeRole}

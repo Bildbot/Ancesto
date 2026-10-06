@@ -46,10 +46,13 @@ import {
   Scan,
   Sparkles,
   User,
-  Check
+  Check,
+  FolderPlus,
+  Unlink
 } from 'lucide-react';
 import { PhotoFaceViewer } from '../media/PhotoFaceViewer';
 import { extractBestFaceAvatar } from '../../services/faceRecognition';
+import { AttachMediaModal } from './AttachMediaModal';
 
 /**
  * Automatically calculates and applies an 'object-fit: cover' and 'object-position: center' style
@@ -96,6 +99,8 @@ interface PersonDetailDrawerProps {
   onSelectPerson: (personId: string) => void;
   allPersons: Person[];
   relationships: RelationshipRecord[];
+  mediaArchive?: MediaItem[];
+  onNavigateToArchive?: () => void;
   onFocusInTree?: (personId: string) => void;
   onDeleteRelationship?: (person1Id: string, person2Id: string, type?: RelationshipType, relationshipId?: string) => void;
   onUpdatePerson?: (updatedPerson: Person) => void;
@@ -111,6 +116,8 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
   onSelectPerson,
   allPersons,
   relationships,
+  mediaArchive = [],
+  onNavigateToArchive,
   onFocusInTree,
   onDeleteRelationship,
   onUpdatePerson,
@@ -119,6 +126,7 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
   // Always call all hooks unconditionally at top level (Rules of Hooks)
   const [activeTab, setActiveTab] = useState<'family' | 'dates' | 'bio' | 'media'>('family');
   const [lightboxMedia, setLightboxMedia] = useState<MediaItem | null>(null);
+  const [isAttachModalOpen, setIsAttachModalOpen] = useState(false);
   const [confirmDeleteRel, setConfirmDeleteRel] = useState<{
     targetId: string;
     targetName: string;
@@ -127,12 +135,26 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
     relationshipId?: string;
   } | null>(null);
 
-  // Collect all media for this person: direct mediaFiles + photos where this person is tagged in faces
+  // Collect all media for this person: direct mediaFiles + photos where this person is tagged in faces.
+  // If a photo has faces tagged with specific people, it is shown ONLY to those tagged people!
   const displayMediaFiles = useMemo<{ media: MediaItem; isTaggedShared: boolean; ownerName?: string }[]>(() => {
     if (!person) return [];
     const mediaMap = new Map<string, { media: MediaItem; isTaggedShared: boolean; ownerName?: string }>();
+
+    // Helper: is this media applicable to this person?
+    const isApplicableToPerson = (m: MediaItem): boolean => {
+      const taggedFaces = m.faces?.filter((f: FaceTag) => Boolean(f.personId)) || [];
+      if (taggedFaces.length > 0) {
+        // Photo has explicitly tagged persons: must include this person!
+        return taggedFaces.some((f: FaceTag) => f.personId === person.id);
+      }
+      // If photo has NO tagged persons yet: show only if uploaded by this person
+      return !m.originPersonId || m.originPersonId === person.id;
+    };
+
     if (person.mediaFiles) {
       person.mediaFiles.forEach((m) => {
+        if (!isApplicableToPerson(m)) return;
         const isFromAnother = Boolean(m.originPersonId && m.originPersonId !== person.id);
         const owner = isFromAnother ? allPersons.find((p) => p.id === m.originPersonId) : undefined;
         mediaMap.set(m.id, {
@@ -159,48 +181,75 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
     return Array.from(mediaMap.values());
   }, [person, allPersons]);
 
-  // Direct upload from drawer media tab
-  const handleDirectUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0 || !person) return;
+  // Attach selected media from archive
+  const handleSaveAttachmentsFromArchive = (selectedMediaIds: string[]) => {
+    if (!person) return;
+    const selectedSet = new Set(selectedMediaIds);
 
-    Array.from(files).forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const dataUrl = event.target?.result as string;
-        let type: MediaItem['type'] = 'document';
-        if (file.type.startsWith('image/')) type = 'photo';
-        else if (file.type.startsWith('video/')) type = 'video';
-
-        const newMedia: MediaItem = {
-          id: 'media-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
-          type,
-          name: file.name.replace(/\.[^/.]+$/, ''),
-          date: '',
-          dataUrl,
-          mimeType: file.type,
-          size: file.size,
-          originPersonId: person.id,
-          faces: []
-        };
-
-        const currentFiles = person.mediaFiles ? [...person.mediaFiles, newMedia] : [newMedia];
-        const updatedPerson = { ...person, mediaFiles: currentFiles };
-
-        if (onUpdateAllPersons) {
-          const nextPersons = allPersons.map((p) => (p.id === person.id ? updatedPerson : p));
-          onUpdateAllPersons(nextPersons);
-        } else if (onUpdatePerson) {
-          onUpdatePerson(updatedPerson);
-        }
-
-        if (type === 'photo') {
-          setLightboxMedia(newMedia);
-        }
-      };
-      reader.readAsDataURL(file);
+    // Pool of all known media in archive + person's current
+    const poolMap = new Map<string, MediaItem>();
+    mediaArchive.forEach((m) => poolMap.set(m.id, m));
+    if (person.mediaFiles) {
+      person.mediaFiles.forEach((m) => poolMap.set(m.id, m));
+    }
+    allPersons.forEach((p) => {
+      p.mediaFiles?.forEach((m) => poolMap.set(m.id, m));
     });
-    e.target.value = '';
+
+    const nextFiles: MediaItem[] = [];
+    selectedMediaIds.forEach((id) => {
+      const item = poolMap.get(id);
+      if (item) nextFiles.push({ ...item });
+    });
+
+    const updatedPerson: Person = {
+      ...person,
+      mediaFiles: nextFiles,
+      updatedAt: Date.now()
+    };
+
+    if (onUpdateAllPersons) {
+      const nextList = allPersons.map((p) => (p.id === person.id ? updatedPerson : p));
+      onUpdateAllPersons(nextList);
+    } else if (onUpdatePerson) {
+      onUpdatePerson(updatedPerson);
+    }
+  };
+
+  // Detach specific media item from this person (keeps file safe in mediaArchive)
+  const handleDetachMedia = (mediaId: string) => {
+    if (!person) return;
+    const filteredFiles = (person.mediaFiles || []).filter((m) => m.id !== mediaId);
+
+    // Also clear face tag assignment if tagged
+    const updatedFiles = filteredFiles.map((m) => {
+      if (m.faces) {
+        return {
+          ...m,
+          faces: m.faces.map((f) =>
+            f.personId === person.id ? { ...f, personId: undefined, isConfirmed: false } : f
+          )
+        };
+      }
+      return m;
+    });
+
+    const updatedPerson: Person = {
+      ...person,
+      mediaFiles: updatedFiles,
+      updatedAt: Date.now()
+    };
+
+    if (onUpdateAllPersons) {
+      const nextList = allPersons.map((p) => (p.id === person.id ? updatedPerson : p));
+      onUpdateAllPersons(nextList);
+    } else if (onUpdatePerson) {
+      onUpdatePerson(updatedPerson);
+    }
+
+    if (lightboxMedia?.id === mediaId) {
+      setLightboxMedia(null);
+    }
   };
 
   // Set photo as avatar, automatically cropped to the person's face
@@ -273,8 +322,8 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
       // 2. Any face tagged with this person with box
       const tagged = media.faces.find((f: FaceTag) => f.personId === person.id && f.box);
       if (tagged) return tagged;
-      // 3. If photo was uploaded by this person, return first face with box
-      if (media.originPersonId === person.id && media.faces[0]?.box) {
+      // 3. If photo was uploaded by this person and face has no other person assigned
+      if (media.originPersonId === person.id && media.faces[0]?.box && !media.faces[0].personId) {
         return media.faces[0];
       }
       return undefined;
@@ -676,40 +725,49 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                     Медиафайлы и сканы ({displayMediaFiles.length})
                   </h3>
                   <p className="text-[11px] text-stone-500">
-                    Персональные фото и групповые снимки, где персона отмечена
+                    Прикрепленные материалы из общего медиаархива
                   </p>
                 </div>
-                <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-xs transition">
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Загрузить фото</span>
-                  <input
-                    type="file"
-                    multiple
-                    accept="image/*,application/pdf"
-                    onChange={handleDirectUpload}
-                    className="hidden"
-                  />
-                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsAttachModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-xs transition"
+                >
+                  <FolderPlus className="w-3.5 h-3.5" />
+                  <span>+ Прикрепить из архива</span>
+                </button>
               </div>
 
               {displayMediaFiles.length === 0 ? (
                 <div className="text-center py-10 text-stone-500 bg-stone-100/60 rounded-xl border border-dashed border-stone-300 p-6">
                   <ImageIcon className="w-9 h-9 mx-auto text-stone-400 mb-2" />
-                  <p className="text-xs font-medium text-stone-700">Медиафайлы и документы пока не прикреплены</p>
-                  <p className="text-[11px] text-stone-500 mt-1 max-w-xs mx-auto">
-                    Загрузите портрет или групповое фото. Если на фото есть несколько человек, отметьте их — фото появится в карточке каждого!
+                  <p className="text-xs font-medium text-stone-700">Медиафайлы пока не прикреплены</p>
+                  <p className="text-[11px] text-stone-500 mt-1 max-w-xs mx-auto leading-relaxed">
+                    Все файлы хранятся в общем Медиаархиве. Вы можете прикрепить любые файлы к этой карточке или загрузить новые через меню архива.
                   </p>
-                  <label className="mt-3.5 cursor-pointer inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-stone-900 text-white hover:bg-stone-800 transition shadow-xs">
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Выбрать фото на устройстве</span>
-                    <input
-                      type="file"
-                      multiple
-                      accept="image/*,application/pdf"
-                      onChange={handleDirectUpload}
-                      className="hidden"
-                    />
-                  </label>
+                  <div className="mt-4 flex items-center justify-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setIsAttachModalOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-amber-600 text-white hover:bg-amber-700 transition shadow-xs"
+                    >
+                      <FolderPlus className="w-3.5 h-3.5" />
+                      <span>Выбрать из медиаархива</span>
+                    </button>
+                    {onNavigateToArchive && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onNavigateToArchive();
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg bg-stone-200 text-stone-800 hover:bg-stone-300 transition"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Перейти в Медиаархив</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
@@ -726,7 +784,7 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                             alt={m.name}
                             className="w-full h-full object-cover object-center group-hover:scale-105 transition duration-300"
                             style={(() => {
-                              const face = m.faces?.find((f: FaceTag) => f.personId === person.id) || m.faces?.[0];
+                              const face = m.faces?.find((f: FaceTag) => f.personId === person.id);
                               return getPortraitFaceStyle(face?.box);
                             })()}
                           />
@@ -777,9 +835,9 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                           {m.caption && <p className="text-[11px] text-stone-600 line-clamp-2 mt-1">{m.caption}</p>}
                         </div>
 
-                        {/* Avatar action on photo */}
-                        {m.type === 'photo' && (
-                          <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-stone-100">
+                        {/* Avatar & Detach action on photo */}
+                        <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-stone-100">
+                          {m.type === 'photo' ? (
                             <button
                               type="button"
                               onClick={(e) => {
@@ -790,11 +848,27 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                               title="Обрезать лицо на фото и сделать главным портретом персоны"
                             >
                               <UserCheck className="w-3 h-3 text-amber-600" />
-                              <span>Портрет лица</span>
+                              <span>Портрет</span>
                             </button>
-                            <span className="text-[10px] text-stone-400">Лица ({m.faces?.length || 0})</span>
-                          </div>
-                        )}
+                          ) : (
+                            <span className="text-[10px] text-stone-400">
+                              {m.type === 'video' ? 'Видео' : 'Документ'}
+                            </span>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDetachMedia(m.id);
+                            }}
+                            className="text-[10px] font-medium text-stone-400 hover:text-rose-600 flex items-center gap-1 transition p-0.5 hover:bg-stone-50 rounded"
+                            title="Открепить от этой персоны (файл останется в общем медиаархиве)"
+                          >
+                            <Unlink className="w-3 h-3" />
+                            <span>Открепить</span>
+                          </button>
+                        </div>
 
                         {/* People tagged on this photo */}
                         {m.faces && m.faces.filter((f: FaceTag) => f.personId).length > 0 && (
@@ -1306,14 +1380,10 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                     setLightboxMedia(nextMedia);
 
                     if (onUpdateAllPersons) {
+                      // Update nextMedia across all persons who currently hold this media item
                       const updatedPersons = allPersons.map((p) => {
-                        let mediaList = p.mediaFiles ? [...p.mediaFiles] : [];
-                        const isCurrent = p.id === person.id;
+                        const mediaList = p.mediaFiles ? [...p.mediaFiles] : [];
                         const hasMedia = mediaList.some((m) => m.id === lightboxMedia.id);
-                        if (isCurrent && !hasMedia) {
-                          mediaList.push(nextMedia);
-                          return { ...p, mediaFiles: mediaList };
-                        }
                         if (hasMedia) {
                           const updatedMediaList = mediaList.map((m) =>
                             m.id === lightboxMedia.id ? nextMedia : m
@@ -1324,12 +1394,21 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                       });
                       onUpdateAllPersons(updatedPersons);
                     } else if (onUpdatePerson) {
-                      const updatedMedia = person.mediaFiles ? person.mediaFiles.map((m) => {
-                        if (m.id === lightboxMedia.id) {
-                          return nextMedia;
+                      const isTaggedOnPhoto = updatedFaces.some((f) => f.personId === person.id);
+                      const hasNoTaggedPersons = !updatedFaces.some((f) => Boolean(f.personId));
+                      const shouldKeepOnPerson = isTaggedOnPhoto || hasNoTaggedPersons;
+
+                      let updatedMedia = person.mediaFiles ? [...person.mediaFiles] : [];
+                      if (shouldKeepOnPerson) {
+                        const idx = updatedMedia.findIndex((m) => m.id === lightboxMedia.id);
+                        if (idx >= 0) {
+                          updatedMedia[idx] = nextMedia;
+                        } else {
+                          updatedMedia.push(nextMedia);
                         }
-                        return m;
-                      }) : [nextMedia];
+                      } else {
+                        updatedMedia = updatedMedia.filter((m) => m.id !== lightboxMedia.id);
+                      }
                       onUpdatePerson({ ...person, mediaFiles: updatedMedia });
                     }
                   }}
@@ -1368,6 +1447,30 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* Attach Media from Archive Modal */}
+      {isAttachModalOpen && person && (
+        <AttachMediaModal
+          isOpen={isAttachModalOpen}
+          onClose={() => setIsAttachModalOpen(false)}
+          targetPerson={person}
+          allPersons={allPersons}
+          mediaArchive={(() => {
+            const map = new Map<string, MediaItem>();
+            mediaArchive.forEach((m) => map.set(m.id, m));
+            if (person.mediaFiles) {
+              person.mediaFiles.forEach((m) => map.set(m.id, m));
+            }
+            allPersons.forEach((p) => {
+              p.mediaFiles?.forEach((m) => map.set(m.id, m));
+            });
+            return Array.from(map.values());
+          })()}
+          currentlyAttachedIds={(person.mediaFiles || []).map((m) => m.id)}
+          onSaveAttachments={handleSaveAttachmentsFromArchive}
+          onNavigateToArchive={onNavigateToArchive}
+        />
       )}
     </>
   );

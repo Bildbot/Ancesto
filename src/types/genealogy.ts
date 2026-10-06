@@ -113,6 +113,7 @@ export interface RelationshipRecord {
 export interface FamilyTreeData {
   persons: Person[];
   relationships: RelationshipRecord[];
+  mediaArchive?: MediaItem[];
   treeName: string;
   description?: string;
   lastModified: number;
