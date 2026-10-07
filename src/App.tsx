@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   FamilyTreeData, 
   Person, 
@@ -11,6 +11,7 @@ import {
 } from './types/genealogy';
 import { EMPTY_TREE_DATA, INITIAL_DEMO_DATA } from './data/demoFamily';
 import { loadFamilyTree, saveFamilyTree } from './services/db';
+import { isTauriDesktop, saveNativeArchiveMedia } from './services/nativeTreeRepository';
 import { getParents, getSpouses } from './utils/kinship';
 import { removeRelationship } from './utils/relationships';
 import { syncTaggedMediaAcrossPersons } from './services/faceRecognition';
@@ -39,6 +40,8 @@ import {
 
 export default function App() {
   const [treeData, setTreeData] = useState<FamilyTreeData>(EMPTY_TREE_DATA);
+  const treeDataRef = useRef(treeData);
+  treeDataRef.current = treeData;
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -258,16 +261,31 @@ export default function App() {
   };
 
   // Master media archive operations
-  const handleAddMediaToArchive = useCallback((newItems: MediaItem[]) => {
-    const currentArchive = treeData.mediaArchive ? [...treeData.mediaArchive] : [];
+  const handleAddMediaToArchive = useCallback(async (newItems: MediaItem[]) => {
+    const currentData = treeDataRef.current;
+    const currentArchive = currentData.mediaArchive ? [...currentData.mediaArchive] : [];
     const existingIds = new Set(currentArchive.map((m) => m.id));
     const toAdd = newItems.filter((m) => !existingIds.has(m.id));
     const nextArchive = [...currentArchive, ...toAdd];
-    updateTreeData({
-      ...treeData,
+    const nextData = {
+      ...currentData,
       mediaArchive: nextArchive
-    });
-  }, [treeData, updateTreeData]);
+    };
+    try {
+      if (isTauriDesktop()) {
+        for (const item of toAdd) await saveNativeArchiveMedia(item);
+      } else {
+        await saveFamilyTree(nextData);
+      }
+      treeDataRef.current = nextData;
+      setTreeData(nextData);
+      setSaveError(null);
+    } catch (saveErr) {
+      console.error('Failed to save media archive item:', saveErr);
+      setSaveError('Не удалось сохранить файл в локальном архиве. Проверьте свободное место на диске и повторите попытку.');
+      throw saveErr;
+    }
+  }, []);
 
   const handleDeleteMediaFromArchive = useCallback((mediaId: string) => {
     const nextArchive = (treeData.mediaArchive || []).filter((m) => m.id !== mediaId);

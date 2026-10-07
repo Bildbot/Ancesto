@@ -21,6 +21,12 @@ fn save_tree(tree: Value, state: State<'_, DatabasePath>) -> Result<(), String> 
 }
 
 #[tauri::command]
+fn save_archive_media(media: Value, state: State<'_, DatabasePath>) -> Result<(), String> {
+    let _guard = state.1.lock().map_err(|error| error.to_string())?;
+    database::save_archive_media(&state.0, &media)
+}
+
+#[tauri::command]
 fn export_backup(destination: String, state: State<'_, DatabasePath>) -> Result<(), String> {
     let _guard = state.1.lock().map_err(|error| error.to_string())?;
     let destination = PathBuf::from(destination);
@@ -78,6 +84,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_tree,
             save_tree,
+            save_archive_media,
             export_backup,
             inspect_backup,
             restore_backup

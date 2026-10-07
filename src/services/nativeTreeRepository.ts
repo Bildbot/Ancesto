@@ -1,5 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { FamilyTreeData } from '../types/genealogy';
+import type { FamilyTreeData, MediaItem } from '../types/genealogy';
 
 export function isTauriDesktop(): boolean {
   return typeof window !== 'undefined' && isTauri();
@@ -11,6 +11,10 @@ export function loadNativeTree(): Promise<FamilyTreeData | null> {
 
 export function saveNativeTree(tree: FamilyTreeData): Promise<void> {
   return invoke('save_tree', { tree });
+}
+
+export function saveNativeArchiveMedia(media: MediaItem): Promise<void> {
+  return invoke('save_archive_media', { media });
 }
 
 export interface BackupSummary {

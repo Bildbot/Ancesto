@@ -30,7 +30,10 @@ import {
   Unlink, 
   Check, 
   ChevronDown,
-  FolderOpen
+  FolderOpen,
+  CircleCheck,
+  CircleAlert,
+  LoaderCircle
 } from 'lucide-react';
 import { getPortraitFaceStyle } from '../modals/PersonDetailDrawer';
 import { readFileAsDataUrl, validateMediaFile } from '../../services/media';
@@ -40,9 +43,18 @@ interface ArchiveMediaViewProps {
   mediaArchive?: MediaItem[];
   onSelectPerson: (personId: string) => void;
   onUpdatePersons?: (updatedPersons: Person[]) => void;
-  onAddMediaToArchive?: (newItems: MediaItem[]) => void;
+  onAddMediaToArchive?: (newItems: MediaItem[]) => void | Promise<void>;
   onDeleteMediaFromArchive?: (mediaId: string) => void;
 }
+
+type UploadFileState = {
+  id: string;
+  name: string;
+  size: number;
+  status: 'waiting' | 'reading' | 'detecting' | 'saving' | 'done' | 'error';
+  progress: number;
+  error?: string;
+};
 
 export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
   persons,
@@ -59,11 +71,15 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
   const [isFaceRecognitionModalOpen, setIsFaceRecognitionModalOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadFiles, setUploadFiles] = useState<UploadFileState[]>([]);
+  const [isUploadProgressOpen, setIsUploadProgressOpen] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [showAttachDropdownMediaId, setShowAttachDropdownMediaId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const onAddMediaToArchiveRef = useRef(onAddMediaToArchive);
+  onAddMediaToArchiveRef.current = onAddMediaToArchive;
 
   // Master merged media archive pool (mediaArchive + any media currently attached to persons)
   const allMedia = useMemo(() => {
@@ -144,27 +160,44 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
 
   // Upload handler for multiple files
   const processUploadedFiles = async (files: FileList | File[]) => {
-    if (!files || files.length === 0) return;
+    if (!files || files.length === 0 || isUploading) return;
+    const fileList = Array.from(files);
+    setUploadFiles(fileList.map((file, index) => ({
+      id: `${index}-${file.name}-${file.lastModified}`,
+      name: file.name,
+      size: file.size,
+      status: 'waiting',
+      progress: 0
+    })));
+    setIsUploadProgressOpen(true);
     setIsUploading(true);
     setUploadError(null);
 
-    const newMediaItems: MediaItem[] = [];
     const errors: string[] = [];
+    const updateFile = (index: number, update: Partial<UploadFileState>) => {
+      setUploadFiles((current) => current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, ...update } : item
+      ));
+    };
 
     try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
         const validationError = validateMediaFile(file);
         if (validationError) {
           errors.push(`${file.name}: ${validationError}`);
+          updateFile(i, { status: 'error', error: validationError });
           continue;
         }
 
         let dataUrl: string;
+        updateFile(i, { status: 'reading', progress: 0 });
         try {
-          dataUrl = await readFileAsDataUrl(file);
+          dataUrl = await readFileAsDataUrl(file, (progress) => updateFile(i, { progress }));
         } catch (error) {
-          errors.push(`${file.name}: ${error instanceof Error ? error.message : 'Не удалось прочитать файл.'}`);
+          const message = error instanceof Error ? error.message : 'Не удалось прочитать файл.';
+          errors.push(`${file.name}: ${message}`);
+          updateFile(i, { status: 'error', error: message });
           continue;
         }
 
@@ -175,17 +208,16 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
 
         const mediaId = 'media-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
         let detectedFaces: FaceTag[] = [];
-
-        // If photo, attempt quick background face scan
         if (type === 'photo') {
+          updateFile(i, { status: 'detecting' });
           try {
             detectedFaces = await detectFacesInPhoto(dataUrl, mediaId);
           } catch {
-            // Ignore detector errors
+            // Face detection is optional; keep the uploaded photo if it fails.
           }
         }
 
-        newMediaItems.push({
+        const mediaItem: MediaItem = {
           id: mediaId,
           type,
           name: file.name.replace(/\.[^/.]+$/, ''),
@@ -194,11 +226,18 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
           mimeType: file.type,
           size: file.size,
           faces: detectedFaces
-        });
-      }
+        };
 
-      if (newMediaItems.length > 0 && onAddMediaToArchive) {
-        onAddMediaToArchive(newMediaItems);
+        updateFile(i, { status: 'saving' });
+        try {
+          if (!onAddMediaToArchiveRef.current) throw new Error('Не удалось сохранить файл в архиве.');
+          await onAddMediaToArchiveRef.current([mediaItem]);
+          updateFile(i, { status: 'done', progress: 100 });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Не удалось сохранить файл в архиве.';
+          errors.push(`${file.name}: ${message}`);
+          updateFile(i, { status: 'error', error: `Ошибка сохранения: ${message}` });
+        }
       }
       if (errors.length > 0) {
         setUploadError(errors.join(' '));
@@ -285,6 +324,110 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
       {uploadError && (
         <div role="alert" className="absolute top-3 left-1/2 -translate-x-1/2 z-50 max-w-[calc(100%-2rem)] rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs font-medium text-red-900 shadow-lg">
           {uploadError}
+        </div>
+      )}
+
+      {isUploadProgressOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-2xs">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="upload-progress-title"
+            className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-2xl"
+          >
+            <header className="flex items-center justify-between border-b border-stone-200 px-5 py-4">
+              <div>
+                <h2 id="upload-progress-title" className="font-serif text-lg font-bold text-stone-900">
+                  Загрузка в медиаархив
+                </h2>
+                <p className="mt-0.5 text-xs text-stone-500">
+                  {uploadFiles.filter((file) => file.status === 'done').length} из {uploadFiles.length} файлов добавлено
+                </p>
+              </div>
+              {!isUploading && (
+                <button
+                  type="button"
+                  aria-label="Закрыть окно прогресса"
+                  onClick={() => setIsUploadProgressOpen(false)}
+                  className="rounded-lg p-2 text-stone-500 hover:bg-stone-100 hover:text-stone-900"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              )}
+            </header>
+            <div className="flex-1 space-y-2 overflow-y-auto p-4" aria-live="polite">
+              {uploadFiles.map((file) => {
+                const isActive = ['reading', 'detecting', 'saving'].includes(file.status);
+                const statusLabel = {
+                  waiting: 'В очереди',
+                  reading: `Чтение файла — ${file.progress}%`,
+                  detecting: 'Распознавание лиц',
+                  saving: 'Сохранение в архив',
+                  done: 'Добавлен в архив',
+                  error: file.error || 'Ошибка'
+                }[file.status];
+                return (
+                  <div key={file.id} className="rounded-xl border border-stone-200 px-3 py-2.5">
+                    <div className="flex items-start gap-2.5">
+                      {file.status === 'done' ? (
+                        <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                      ) : file.status === 'error' ? (
+                        <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                      ) : isActive ? (
+                        <LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-amber-700" />
+                      ) : (
+                        <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-stone-300" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline justify-between gap-3">
+                          <p className="truncate text-xs font-semibold text-stone-900" title={file.name}>{file.name}</p>
+                          <span className="shrink-0 text-[10px] text-stone-500">
+                            {file.size < 1024 * 1024
+                              ? `${Math.max(1, Math.round(file.size / 1024))} КБ`
+                              : `${(file.size / (1024 * 1024)).toFixed(1)} МБ`}
+                          </span>
+                        </div>
+                        <p className={`mt-0.5 text-[11px] ${file.status === 'error' ? 'text-rose-700' : file.status === 'done' ? 'text-emerald-700' : 'text-stone-500'}`}>
+                          {statusLabel}
+                        </p>
+                        {(file.status === 'reading' || file.status === 'saving') && (
+                          <div
+                            className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-stone-100"
+                            role="progressbar"
+                            aria-label={`Прогресс: ${file.name}`}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={file.status === 'reading' ? file.progress : 100}
+                          >
+                            <div
+                              className={`h-full rounded-full transition-all ${file.status === 'saving' ? 'w-full animate-pulse bg-amber-500' : 'bg-amber-600'}`}
+                              style={file.status === 'reading' ? { width: `${file.progress}%` } : undefined}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {!isUploading && (
+              <footer className="flex items-center justify-between gap-3 border-t border-stone-200 px-5 py-3">
+                <p className="text-xs text-stone-500">
+                  {uploadFiles.filter((file) => file.status === 'error').length > 0
+                    ? `${uploadFiles.filter((file) => file.status === 'error').length} файлов с ошибкой`
+                    : 'Загрузка завершена'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIsUploadProgressOpen(false)}
+                  className="rounded-lg bg-stone-900 px-4 py-2 text-xs font-semibold text-white hover:bg-stone-800"
+                >
+                  Готово
+                </button>
+              </footer>
+            )}
+          </section>
         </div>
       )}
 

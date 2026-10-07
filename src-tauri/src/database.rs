@@ -94,6 +94,28 @@ pub fn save_tree(path: &Path, tree: &Value) -> Result<(), String> {
     Ok(())
 }
 
+pub fn save_archive_media(path: &Path, media: &Value) -> Result<(), String> {
+    let mut tree = serde_json::json!({ "mediaArchive": [media] });
+    let media_dir = media_directory(path);
+    externalize_media(&mut tree, &media_dir)?;
+    let stored_media = tree["mediaArchive"][0].clone();
+    let id = required_string(&stored_media, "id", "media")?;
+    let payload = serialize(&stored_media)?;
+    let mut connection = open(path)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "INSERT INTO media (id, payload) VALUES (?1, ?2)",
+            params![id, payload],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    cleanup_media(&connection, &media_dir)?;
+    Ok(())
+}
+
 pub fn save_snapshot(connection: &mut Connection, tree: &Value) -> Result<(), String> {
     let last_modified = tree
         .get("lastModified")
@@ -648,6 +670,42 @@ mod tests {
                 .unwrap_err()
                 .contains("Не удалось прочитать медиафайл")
         );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saves_archive_media_incrementally_without_requiring_a_full_tree() {
+        let directory =
+            std::env::temp_dir().join(format!("genedek-incremental-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("archive.sqlite3");
+        save_tree(
+            &path,
+            &json!({
+                "treeName": "Тест", "version": 1, "lastModified": 1,
+                "persons": [], "relationships": [], "mediaArchive": []
+            }),
+        )
+        .unwrap();
+        let media = json!({
+            "id": "media-incremental",
+            "type": "video",
+            "name": "large-video",
+            "mimeType": "video/mp4",
+            "dataUrl": format!("data:video/mp4;base64,{}", STANDARD.encode(vec![7_u8; 1024 * 1024]))
+        });
+
+        save_archive_media(&path, &media).unwrap();
+        let loaded = load_tree(&path).unwrap().unwrap();
+        assert_eq!(loaded["mediaArchive"].as_array().unwrap().len(), 1);
+        assert_eq!(loaded["mediaArchive"][0]["id"], "media-incremental");
+        assert!(
+            loaded["mediaArchive"][0]["dataUrl"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:video/mp4;base64,")
+        );
+
         std::fs::remove_dir_all(directory).unwrap();
     }
 
