@@ -1,23 +1,23 @@
 {
-  "id": "/",
+  "id": "./",
   "name": "Родословная — Генеалогическое древо",
   "short_name": "Родословная",
   "description": "Интерактивное генеалогическое древо, визуальная карта родственных связей и семейный медиаархив",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#1c1917",
   "theme_color": "#1c1917",
   "icons": [
     {
-      "src": "/icon.svg",
+      "src": "./icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
     },
     {
-      "src": "/icon.svg",
+      "src": "./icon.svg",
       "sizes": "192x192 512x512",
       "type": "image/svg+xml",
       "purpose": "maskable"

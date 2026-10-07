@@ -378,7 +378,7 @@ export default function App() {
         {/* Zone 1: Single text element wordmark */}
         <div className="flex items-center gap-3">
           <a
-            href="/"
+            href={import.meta.env.BASE_URL}
             onClick={(e) => {
               e.preventDefault();
               setActiveView('tree');

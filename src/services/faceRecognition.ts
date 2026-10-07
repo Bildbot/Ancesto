@@ -7,7 +7,7 @@ let modelsLoadingPromise: Promise<boolean> | null = null;
 let modelLoadError: string | null = null;
 
 // Bundled models only: recognition must work without contacting third parties.
-const MODEL_URL_LOCAL = '/models';
+const MODEL_URL_LOCAL = `${import.meta.env.BASE_URL}models`;
 
 /**
  * Initialize and load face-api neural network weights

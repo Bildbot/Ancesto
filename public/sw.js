@@ -1,10 +1,6 @@
-const CACHE_NAME = 'rodoslovnaya-v2';
-const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/icon.svg'
-];
+const CACHE_NAME = 'rodoslovnaya-v3';
+const STATIC_ASSETS = ['./', './index.html', './manifest.json', './icon.svg']
+  .map((asset) => new URL(asset, self.registration.scope).toString());
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

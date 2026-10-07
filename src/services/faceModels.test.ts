@@ -16,7 +16,7 @@ it('reports missing bundled models without trying an external CDN', async () => 
   const { loadFaceModels, getFaceModelError } = await import('./faceRecognition');
   expect(await loadFaceModels()).toBe(false);
   expect(load).toHaveBeenCalledTimes(3);
-  expect(load.mock.calls.every(([url]) => url === '/models')).toBe(true);
+  expect(load.mock.calls.every(([url]) => url === `${import.meta.env.BASE_URL}models`)).toBe(true);
   expect(getFaceModelError()).toContain('Local model missing');
 });
 
