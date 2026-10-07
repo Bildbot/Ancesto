@@ -1,0 +1,15 @@
+{
+  "identifier": "com.bildbot.genedek.smoke",
+  "app": {
+    "appDirectoriesOverride": "$TEMP/opencode/genedek-desktop-smoke",
+    "windows": [
+      {
+        "label": "main",
+        "title": "Genedek — isolated smoke test",
+        "width": 1280,
+        "height": 850,
+        "additionalBrowserArgs": "--remote-debugging-port=9224 --remote-debugging-address=127.0.0.1"
+      }
+    ]
+  }
+}

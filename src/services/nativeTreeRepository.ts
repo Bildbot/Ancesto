@@ -1,0 +1,32 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import type { FamilyTreeData } from '../types/genealogy';
+
+export function isTauriDesktop(): boolean {
+  return typeof window !== 'undefined' && isTauri();
+}
+
+export function loadNativeTree(): Promise<FamilyTreeData | null> {
+  return invoke<FamilyTreeData | null>('load_tree');
+}
+
+export function saveNativeTree(tree: FamilyTreeData): Promise<void> {
+  return invoke('save_tree', { tree });
+}
+
+export interface BackupSummary {
+  persons: number;
+  relationships: number;
+  media: number;
+}
+
+export function exportNativeBackup(destination: string): Promise<void> {
+  return invoke('export_backup', { destination });
+}
+
+export function inspectNativeBackup(bytes: number[]): Promise<BackupSummary> {
+  return invoke('inspect_backup', { bytes });
+}
+
+export function restoreNativeBackup(bytes: number[]): Promise<string> {
+  return invoke('restore_backup', { bytes });
+}

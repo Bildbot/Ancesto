@@ -73,6 +73,7 @@ export interface MediaItem {
   isPrimaryAvatar?: boolean; // Set as profile portrait
   faces?: FaceTag[]; // Detected or tagged faces on this photo
   originPersonId?: string; // ID of person who originally uploaded this file
+  manualPersonIds?: string[]; // Explicit attachments independent of face tags
 }
 
 export interface Person {

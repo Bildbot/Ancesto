@@ -51,7 +51,7 @@ import {
   Unlink
 } from 'lucide-react';
 import { PhotoFaceViewer } from '../media/PhotoFaceViewer';
-import { extractBestFaceAvatar } from '../../services/faceRecognition';
+import { detachMediaFromPerson, extractBestFaceAvatar } from '../../services/faceRecognition';
 import { AttachMediaModal } from './AttachMediaModal';
 
 /**
@@ -219,32 +219,10 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
   // Detach specific media item from this person (keeps file safe in mediaArchive)
   const handleDetachMedia = (mediaId: string) => {
     if (!person) return;
-    const filteredFiles = (person.mediaFiles || []).filter((m) => m.id !== mediaId);
-
-    // Also clear face tag assignment if tagged
-    const updatedFiles = filteredFiles.map((m) => {
-      if (m.faces) {
-        return {
-          ...m,
-          faces: m.faces.map((f) =>
-            f.personId === person.id ? { ...f, personId: undefined, isConfirmed: false } : f
-          )
-        };
-      }
-      return m;
-    });
-
-    const updatedPerson: Person = {
-      ...person,
-      mediaFiles: updatedFiles,
-      updatedAt: Date.now()
-    };
-
     if (onUpdateAllPersons) {
-      const nextList = allPersons.map((p) => (p.id === person.id ? updatedPerson : p));
-      onUpdateAllPersons(nextList);
+      onUpdateAllPersons(detachMediaFromPerson(allPersons, person.id, mediaId));
     } else if (onUpdatePerson) {
-      onUpdatePerson(updatedPerson);
+      onUpdatePerson(detachMediaFromPerson([person], person.id, mediaId)[0]);
     }
 
     if (lightboxMedia?.id === mediaId) {

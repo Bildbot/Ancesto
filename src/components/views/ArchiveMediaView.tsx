@@ -2,6 +2,8 @@ import React, { useState, useMemo, useRef } from 'react';
 import { Person, MediaItem, MediaType, FaceTag } from '../../types/genealogy';
 import { formatFullName, formatDisplayDate } from '../../utils/kinship';
 import { 
+  attachMediaToPerson,
+  detachMediaFromPerson,
   updateFaceSuggestionsAcrossTree, 
   syncTaggedMediaAcrossPersons,
   detectFacesInPhoto 
@@ -31,6 +33,7 @@ import {
   FolderOpen
 } from 'lucide-react';
 import { getPortraitFaceStyle } from '../modals/PersonDetailDrawer';
+import { readFileAsDataUrl, validateMediaFile } from '../../services/media';
 
 interface ArchiveMediaViewProps {
   persons: Person[];
@@ -56,6 +59,7 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
   const [isFaceRecognitionModalOpen, setIsFaceRecognitionModalOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [showAttachDropdownMediaId, setShowAttachDropdownMediaId] = useState<string | null>(null);
 
@@ -142,50 +146,66 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
   const processUploadedFiles = async (files: FileList | File[]) => {
     if (!files || files.length === 0) return;
     setIsUploading(true);
+    setUploadError(null);
 
     const newMediaItems: MediaItem[] = [];
+    const errors: string[] = [];
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const dataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target?.result as string);
-        reader.readAsDataURL(file);
-      });
-
-      let type: MediaType = 'document';
-      if (file.type.startsWith('image/')) type = 'photo';
-      else if (file.type.startsWith('video/')) type = 'video';
-      else if (file.type.startsWith('audio/')) type = 'audio';
-
-      const mediaId = 'media-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
-      let detectedFaces: FaceTag[] = [];
-
-      // If photo, attempt quick background face scan
-      if (type === 'photo') {
-        try {
-          detectedFaces = await detectFacesInPhoto(dataUrl, mediaId);
-        } catch {
-          // Ignore detector errors
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const validationError = validateMediaFile(file);
+        if (validationError) {
+          errors.push(`${file.name}: ${validationError}`);
+          continue;
         }
+
+        let dataUrl: string;
+        try {
+          dataUrl = await readFileAsDataUrl(file);
+        } catch (error) {
+          errors.push(`${file.name}: ${error instanceof Error ? error.message : 'Не удалось прочитать файл.'}`);
+          continue;
+        }
+
+        let type: MediaType = 'document';
+        if (file.type.startsWith('image/')) type = 'photo';
+        else if (file.type.startsWith('video/')) type = 'video';
+        else if (file.type.startsWith('audio/')) type = 'audio';
+
+        const mediaId = 'media-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
+        let detectedFaces: FaceTag[] = [];
+
+        // If photo, attempt quick background face scan
+        if (type === 'photo') {
+          try {
+            detectedFaces = await detectFacesInPhoto(dataUrl, mediaId);
+          } catch {
+            // Ignore detector errors
+          }
+        }
+
+        newMediaItems.push({
+          id: mediaId,
+          type,
+          name: file.name.replace(/\.[^/.]+$/, ''),
+          date: new Date().toISOString().slice(0, 10),
+          dataUrl,
+          mimeType: file.type,
+          size: file.size,
+          faces: detectedFaces
+        });
       }
 
-      newMediaItems.push({
-        id: mediaId,
-        type,
-        name: file.name.replace(/\.[^/.]+$/, ''),
-        date: new Date().toISOString().slice(0, 10),
-        dataUrl,
-        mimeType: file.type,
-        size: file.size,
-        faces: detectedFaces
-      });
+      if (newMediaItems.length > 0 && onAddMediaToArchive) {
+        onAddMediaToArchive(newMediaItems);
+      }
+      if (errors.length > 0) {
+        setUploadError(errors.join(' '));
+      }
+    } finally {
+      setIsUploading(false);
     }
-
-    if (onAddMediaToArchive) {
-      onAddMediaToArchive(newMediaItems);
-    }
-    setIsUploading(false);
   };
 
   // Drag and drop handlers
@@ -220,10 +240,7 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
     const alreadyAttached = targetPerson.mediaFiles?.some((m) => m.id === media.id);
     if (alreadyAttached) return;
 
-    const updatedMedia = targetPerson.mediaFiles ? [...targetPerson.mediaFiles, media] : [media];
-    const nextPersons = persons.map((p) => (p.id === personId ? { ...p, mediaFiles: updatedMedia } : p));
-    const synced = syncTaggedMediaAcrossPersons(nextPersons);
-    onUpdatePersons(synced);
+    onUpdatePersons(attachMediaToPerson(persons, personId, media));
     setShowAttachDropdownMediaId(null);
   };
 
@@ -231,31 +248,7 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
   const handleDetachPersonFromMedia = (mediaId: string, personId: string) => {
     if (!onUpdatePersons) return;
 
-    const nextPersons = persons.map((p) => {
-      if (p.id !== personId) return p;
-      const filtered = (p.mediaFiles || []).filter((m) => m.id !== mediaId);
-      return { ...p, mediaFiles: filtered };
-    });
-
-    // Also remove face assignment if tagged
-    const cleanedPersons = nextPersons.map((p) => {
-      if (!p.mediaFiles) return p;
-      return {
-        ...p,
-        mediaFiles: p.mediaFiles.map((m) => {
-          if (m.id === mediaId && m.faces) {
-            return {
-              ...m,
-              faces: m.faces.map((f) => (f.personId === personId ? { ...f, personId: undefined, isConfirmed: false } : f))
-            };
-          }
-          return m;
-        })
-      };
-    });
-
-    const synced = syncTaggedMediaAcrossPersons(cleanedPersons);
-    onUpdatePersons(synced);
+    onUpdatePersons(detachMediaFromPerson(persons, personId, mediaId));
   };
 
   // Delete media permanently from archive
@@ -286,6 +279,12 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
           <p className="text-xs text-stone-600 mt-1">
             Фотографии, сканы документов, видео и аудиофайлы
           </p>
+        </div>
+      )}
+
+      {uploadError && (
+        <div role="alert" className="absolute top-3 left-1/2 -translate-x-1/2 z-50 max-w-[calc(100%-2rem)] rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs font-medium text-red-900 shadow-lg">
+          {uploadError}
         </div>
       )}
 
@@ -351,7 +350,7 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
               type="file"
               multiple
               disabled={isUploading}
-              accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
+              accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/ogg,audio/wav,.pdf,.doc,.docx,.txt"
               onChange={(e) => {
                 if (e.target.files) {
                   processUploadedFiles(e.target.files);

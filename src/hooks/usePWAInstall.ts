@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { isTauriDesktop } from '../services/nativeTreeRepository';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -11,6 +12,10 @@ export function usePWAInstall() {
   const [isIOS, setIsIOS] = useState(false);
 
   useEffect(() => {
+    if (isTauriDesktop()) {
+      setIsInstalled(true);
+      return;
+    }
     // Detect standalone mode (already installed)
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||

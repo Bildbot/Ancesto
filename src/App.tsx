@@ -12,6 +12,7 @@ import {
 import { EMPTY_TREE_DATA, INITIAL_DEMO_DATA } from './data/demoFamily';
 import { loadFamilyTree, saveFamilyTree } from './services/db';
 import { getParents, getSpouses } from './utils/kinship';
+import { removeRelationship } from './utils/relationships';
 import { syncTaggedMediaAcrossPersons } from './services/faceRecognition';
 import { FamilyTreeView } from './components/views/FamilyTreeView';
 import { NetworkGraphView } from './components/views/NetworkGraphView';
@@ -39,6 +40,8 @@ import {
 export default function App() {
   const [treeData, setTreeData] = useState<FamilyTreeData>(EMPTY_TREE_DATA);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>('tree');
 
   // Selected person for detail drawer
@@ -68,11 +71,15 @@ export default function App() {
         };
         setTreeData(normalizedData);
         // Persist normalized data so any legacy child-type records and mislinked media are immediately upgraded in storage
-        saveFamilyTree(normalizedData);
+        void saveFamilyTree(normalizedData).catch((saveErr) => {
+          console.error('Failed to save normalized tree data:', saveErr);
+          setSaveError('Не удалось сохранить изменения в локальном архиве. Экспортируйте резервную копию и повторите попытку.');
+        });
         setIsLoading(false);
       })
       .catch((err) => {
         console.error('Failed to load tree data:', err);
+        setLoadError(err instanceof Error ? err.message : String(err));
         setIsLoading(false);
       });
   }, []);
@@ -80,7 +87,12 @@ export default function App() {
   // Auto-save on data change
   const updateTreeData = useCallback((newData: FamilyTreeData) => {
     setTreeData(newData);
-    saveFamilyTree(newData);
+    void saveFamilyTree(newData)
+      .then(() => setSaveError(null))
+      .catch((saveErr) => {
+        console.error('Failed to save tree data:', saveErr);
+        setSaveError('Не удалось сохранить изменения в локальном архиве. Экспортируйте резервную копию и повторите попытку.');
+      });
   }, []);
 
   // Save person handler
@@ -192,24 +204,13 @@ export default function App() {
     type?: RelationshipType,
     relationshipId?: string
   ) => {
-    const updatedRelationships = treeData.relationships.filter((rel) => {
-      if (relationshipId && rel.id === relationshipId) {
-        return false;
-      }
-      const isDirect = rel.person1Id === person1Id && rel.person2Id === person2Id;
-      const isReverse = rel.person1Id === person2Id && rel.person2Id === person1Id;
-      if (isDirect || isReverse) {
-        if (!type) return false;
-        if (type === 'parent' || type === 'child' || type === 'adoptive-parent' || type === 'adoptive-child') {
-          return rel.type !== 'parent' && rel.type !== 'child' && rel.type !== 'adoptive-parent' && rel.type !== 'adoptive-child';
-        }
-        if (type === 'spouse' || type === 'former-spouse') {
-          return rel.type !== 'spouse' && rel.type !== 'former-spouse';
-        }
-        return rel.type !== type;
-      }
-      return true;
-    });
+    const updatedRelationships = removeRelationship(
+      treeData.relationships,
+      person1Id,
+      person2Id,
+      type,
+      relationshipId,
+    );
 
     updateTreeData({
       ...treeData,
@@ -307,6 +308,21 @@ export default function App() {
   };
 
   const inspectedPerson = treeData.persons.find((p) => p.id === inspectedPersonId) || null;
+
+  if (loadError) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-stone-100 text-stone-700 p-6">
+        <div role="alert" className="max-w-lg space-y-4">
+          <h1 className="font-serif text-lg font-bold">Не удалось открыть семейный архив</h1>
+          <p className="text-sm break-words">{loadError}</p>
+          <p className="text-sm">Данные не заменены пустым деревом. Проверьте файлы архива и повторите загрузку.</p>
+          <button onClick={() => window.location.reload()} className="rounded-lg bg-stone-900 px-4 py-2 text-sm text-white">
+            Повторить загрузку
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -414,6 +430,12 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {saveError && (
+        <div role="alert" className="px-4 py-2 text-xs font-medium bg-red-100 text-red-900 border-b border-red-200">
+          {saveError}
+        </div>
+      )}
 
       {/* Main View Area */}
       <main className="flex-1 relative overflow-hidden">

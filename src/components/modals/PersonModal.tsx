@@ -693,7 +693,12 @@ export const PersonModal: React.FC<PersonModalProps> = ({
                           type="button"
                           onClick={() => {
                             if (onDeleteRelationship && person) {
-                              onDeleteRelationship(person.id, confirmDeleteRel.targetId, confirmDeleteRel.type);
+                              onDeleteRelationship(
+                                person.id,
+                                confirmDeleteRel.targetId,
+                                confirmDeleteRel.type,
+                                confirmDeleteRel.relationshipId,
+                              );
                             }
                             setConfirmDeleteRel(null);
                           }}

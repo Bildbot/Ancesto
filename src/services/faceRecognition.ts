@@ -1,4 +1,4 @@
-import * as faceapi from '@vladmandic/face-api';
+let faceapi: typeof import('@vladmandic/face-api');
 import { Person, MediaItem, FaceTag, FaceBox } from '../types/genealogy';
 
 // Model loading state
@@ -6,9 +6,8 @@ let modelsLoaded = false;
 let modelsLoadingPromise: Promise<boolean> | null = null;
 let modelLoadError: string | null = null;
 
-// Paths to face-api models (cached in public/models or CDN fallback)
+// Bundled models only: recognition must work without contacting third parties.
 const MODEL_URL_LOCAL = '/models';
-const MODEL_URL_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
 
 /**
  * Initialize and load face-api neural network weights
@@ -19,28 +18,15 @@ export async function loadFaceModels(): Promise<boolean> {
 
   modelsLoadingPromise = (async () => {
     try {
-      // Try local models first
-      try {
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL_LOCAL),
-          faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL_LOCAL),
-          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL_LOCAL)
-        ]);
-        modelsLoaded = true;
-        modelLoadError = null;
-        return true;
-      } catch (localErr) {
-        console.warn('Local face models not reachable, falling back to CDN...', localErr);
-        // Fallback to CDN
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL_CDN),
-          faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL_CDN),
-          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL_CDN)
-        ]);
-        modelsLoaded = true;
-        modelLoadError = null;
-        return true;
-      }
+      faceapi = await import('@vladmandic/face-api');
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL_LOCAL),
+        faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL_LOCAL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL_LOCAL)
+      ]);
+      modelsLoaded = true;
+      modelLoadError = null;
+      return true;
     } catch (err: any) {
       console.error('Failed to load face detection neural networks:', err);
       modelLoadError = err?.message || 'Не удалось загрузить модели распознавания лиц';
@@ -202,7 +188,10 @@ export function matchFaceToPersons(
   const personDistances: { [personId: string]: number[] } = {};
 
   for (const ref of knownReferences) {
-    const dist = faceapi.euclideanDistance(targetDescriptor, ref.descriptor);
+    if (ref.descriptor.length !== 128) continue;
+    const dist = Math.sqrt(targetDescriptor.reduce((sum, value, index) => (
+      sum + (value - ref.descriptor[index]) ** 2
+    ), 0));
     if (!personDistances[ref.personId]) {
       personDistances[ref.personId] = [];
     }
@@ -342,6 +331,7 @@ export function syncTaggedMediaAcrossPersons(persons: Person[]): Person[] {
         allMediaMap.set(media.id, {
           ...media,
           originPersonId: media.originPersonId || person.id,
+          manualPersonIds: media.manualPersonIds ? [...new Set(media.manualPersonIds)] : [],
           faces: media.faces ? [...media.faces] : []
         });
       } else {
@@ -365,6 +355,10 @@ export function syncTaggedMediaAcrossPersons(persons: Person[]): Person[] {
           }
         });
         existing.faces = Array.from(facesMap.values());
+        existing.manualPersonIds = Array.from(new Set([
+          ...(existing.manualPersonIds || []),
+          ...(media.manualPersonIds || []),
+        ]));
         if (!existing.originPersonId && (media.originPersonId || person.id)) {
           existing.originPersonId = media.originPersonId || person.id;
         }
@@ -395,16 +389,15 @@ export function syncTaggedMediaAcrossPersons(persons: Person[]): Person[] {
     const filteredExistingMedia = rawExistingMedia.filter((m) => {
       const canonical = allMediaMap.get(m.id) || m;
       const taggedSet = taggedPersonsPerMedia.get(m.id);
+      const isManuallyAttached = canonical.manualPersonIds?.includes(person.id);
 
       if (taggedSet && taggedSet.size > 0) {
-        // Photo has explicitly tagged persons: keep ONLY if this person is one of them
-        return taggedSet.has(person.id);
+        return taggedSet.has(person.id) || isManuallyAttached;
       }
 
-      // If photo has NO tagged persons at all (e.g. document, unanalyzed photo):
-      // Keep only on the card of the person who uploaded/owns it
-      const origin = canonical.originPersonId || m.originPersonId;
-      return !origin || origin === person.id;
+      // Untagged media can be deliberately attached to several people. Face tags
+      // control suggested links, but must not remove manual attachments.
+      return true;
     });
 
     if (filteredExistingMedia.length !== rawExistingMedia.length) {
@@ -429,8 +422,9 @@ export function syncTaggedMediaAcrossPersons(persons: Person[]): Person[] {
     allMediaMap.forEach((canonicalMedia, mediaId) => {
       const taggedSet = taggedPersonsPerMedia.get(mediaId);
       const isTagged = taggedSet && taggedSet.has(person.id);
+      const isManuallyAttached = canonicalMedia.manualPersonIds?.includes(person.id);
 
-      if (isTagged && !currentMediaMap.has(mediaId)) {
+      if ((isTagged || isManuallyAttached) && !currentMediaMap.has(mediaId)) {
         nextMediaList.push({ ...canonicalMedia });
         currentMediaMap.set(mediaId, canonicalMedia);
         hasChanges = true;
@@ -447,6 +441,59 @@ export function syncTaggedMediaAcrossPersons(persons: Person[]): Person[] {
 
     return person;
   });
+}
+
+export function detachMediaFromPerson(
+  persons: Person[],
+  personId: string,
+  mediaId: string,
+): Person[] {
+  const updatedPersons = persons.map((person) => {
+    const clearedMedia = person.mediaFiles.map((media) => {
+      if (media.id !== mediaId) return media;
+      return {
+        ...media,
+        manualPersonIds: media.manualPersonIds?.filter((id) => id !== personId),
+        faces: media.faces?.map((face) => (
+          face.personId === personId
+            ? { ...face, personId: undefined, isConfirmed: false }
+            : face
+        )),
+      };
+    });
+
+    return {
+      ...person,
+      mediaFiles: person.id === personId
+        ? clearedMedia.filter((media) => media.id !== mediaId)
+        : clearedMedia,
+      updatedAt: person.id === personId ? Date.now() : person.updatedAt,
+    };
+  });
+
+  return syncTaggedMediaAcrossPersons(updatedPersons);
+}
+
+export function attachMediaToPerson(
+  persons: Person[],
+  personId: string,
+  media: MediaItem,
+): Person[] {
+  const explicitlyAttachedMedia: MediaItem = {
+    ...media,
+    manualPersonIds: Array.from(new Set([...(media.manualPersonIds || []), personId])),
+  };
+
+  const updatedPersons = persons.map((person) => {
+    if (person.id !== personId) return person;
+    const existingIndex = person.mediaFiles.findIndex((item) => item.id === media.id);
+    const mediaFiles = existingIndex === -1
+      ? [...person.mediaFiles, explicitlyAttachedMedia]
+      : person.mediaFiles.map((item, index) => index === existingIndex ? explicitlyAttachedMedia : item);
+    return { ...person, mediaFiles, updatedAt: Date.now() };
+  });
+
+  return syncTaggedMediaAcrossPersons(updatedPersons);
 }
 
 /**

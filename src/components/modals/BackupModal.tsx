@@ -1,7 +1,11 @@
 import React, { useRef, useState } from 'react';
 import { FamilyTreeData } from '../../types/genealogy';
-import { exportTreeAsJson, exportTreeAsGedcom, validateImportedData } from '../../services/db';
+import { exportTreeAsJson, exportTreeAsGedcom, validateImportedData, saveFamilyTree, waitForPendingSaves } from '../../services/db';
+import { isTauriDesktop, exportNativeBackup, inspectNativeBackup, restoreNativeBackup, type BackupSummary } from '../../services/nativeTreeRepository';
+import { save } from '@tauri-apps/plugin-dialog';
 import { X, Download, Upload, RefreshCw, Trash2, FileText, CheckCircle2, AlertTriangle } from 'lucide-react';
+
+const MAX_BACKUP_FILE_SIZE = 100 * 1024 * 1024;
 
 interface BackupModalProps {
   isOpen: boolean;
@@ -23,10 +27,66 @@ export const BackupModal: React.FC<BackupModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [confirmAction, setConfirmAction] = useState<'resetDemo' | 'clearTree' | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [pendingImport, setPendingImport] = useState<FamilyTreeData | null>(null);
+  const [pendingZip, setPendingZip] = useState<{ bytes: number[]; summary: BackupSummary } | null>(null);
+  const [isBusy, setIsBusy] = useState(false);
+  const desktop = isTauriDesktop();
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const showError = (error: unknown) => {
+    setStatusMessage({ text: error instanceof Error ? error.message : String(error), type: 'error' });
+  };
+
+  const handleExport = async () => {
+    if (!desktop) { exportTreeAsJson(treeData); return; }
+    setIsBusy(true);
+    try {
+      const destination = await save({
+        defaultPath: `genedek-${new Date().toISOString().slice(0, 10)}.zip`,
+        filters: [{ name: 'Резервная копия Genedek', extensions: ['zip'] }],
+      });
+      if (!destination) return;
+      await saveFamilyTree(treeData);
+      await exportNativeBackup(destination);
+      setStatusMessage({ text: `ZIP-копия сохранена: ${destination}`, type: 'success' });
+    } catch (error) { showError(error); }
+    finally { setIsBusy(false); }
+  };
+
+  const handleRestoreZip = async () => {
+    if (!pendingZip) return;
+    setIsBusy(true);
+    try {
+      await waitForPendingSaves();
+      const rollbackPath = await restoreNativeBackup(pendingZip.bytes);
+      setPendingZip(null);
+      setStatusMessage({ text: `Архив восстановлен. Предыдущая копия: ${rollbackPath}`, type: 'success' });
+      window.location.reload();
+    } catch (error) { showError(error); }
+    finally { setIsBusy(false); }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
+    setPendingImport(null);
+    setPendingZip(null);
+    setStatusMessage(null);
     if (!file) return;
+    if (file.size > MAX_BACKUP_FILE_SIZE) {
+      setStatusMessage({ text: 'Размер резервной копии превышает допустимые 100 МБ.', type: 'error' });
+      return;
+    }
+
+    if (desktop && file.name.toLowerCase().endsWith('.zip')) {
+      setIsBusy(true);
+      try {
+        const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+        const summary = await inspectNativeBackup(bytes);
+        setPendingZip({ bytes, summary });
+      } catch (error) { showError(error); }
+      finally { setIsBusy(false); }
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -34,17 +94,17 @@ export const BackupModal: React.FC<BackupModalProps> = ({
         const raw = JSON.parse(event.target?.result as string);
         const valid = validateImportedData(raw);
         if (valid) {
-          onImportData(valid);
-          setStatusMessage({ text: 'Семейный архив успешно загружен!', type: 'success' });
-          setTimeout(() => {
-            onClose();
-          }, 1200);
+          setPendingImport(valid);
+          setStatusMessage(null);
         } else {
           setStatusMessage({ text: 'Ошибка: файл не является корректным архивом родословной.', type: 'error' });
         }
       } catch (err) {
         setStatusMessage({ text: 'Не удалось прочитать файл. Убедитесь, что это корректный JSON.', type: 'error' });
       }
+    };
+    reader.onerror = () => {
+      setStatusMessage({ text: 'Не удалось прочитать файл. Попробуйте выбрать резервную копию ещё раз.', type: 'error' });
     };
     reader.readAsText(file);
   };
@@ -74,6 +134,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
           </div>
           <button
             onClick={onClose}
+            disabled={isBusy}
             className="p-1.5 text-stone-400 hover:text-stone-100 rounded-lg transition"
           >
             <X className="w-5 h-5" />
@@ -81,7 +142,8 @@ export const BackupModal: React.FC<BackupModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6 text-stone-800">
+        <fieldset disabled={isBusy} className="p-6 space-y-6 text-stone-800">
+          {isBusy && <p role="status" className="text-xs text-stone-600">Проверка и обработка резервной копии…</p>}
           {/* Summary */}
           <div className="p-4 rounded-xl bg-stone-50 border border-stone-200">
             <span className="text-xs font-semibold uppercase tracking-wider text-stone-500 block mb-2">
@@ -111,14 +173,14 @@ export const BackupModal: React.FC<BackupModalProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button
-                onClick={() => exportTreeAsJson(treeData)}
+                onClick={handleExport}
                 className="flex items-start gap-3 p-3.5 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 hover:border-amber-400 text-left transition shadow-2xs"
               >
                 <div className="p-2 rounded-lg bg-amber-50 text-amber-700">
                   <Download className="w-4 h-4" />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-stone-900">Полный архив (.JSON)</h4>
+                  <h4 className="text-xs font-bold text-stone-900">Полный архив ({desktop ? '.ZIP' : '.JSON'})</h4>
                   <p className="text-[11px] text-stone-500 mt-0.5 leading-snug">
                     Включает все фото, сканы документов, даты и связи.
                   </p>
@@ -151,7 +213,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
             <input
               type="file"
               ref={fileInputRef}
-              accept=".json"
+              accept={desktop ? '.zip,.json' : '.json'}
               onChange={handleFileChange}
               className="hidden"
             />
@@ -161,8 +223,54 @@ export const BackupModal: React.FC<BackupModalProps> = ({
               className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-dashed border-stone-300 hover:border-stone-500 bg-white text-xs font-medium text-stone-700 transition"
             >
               <Upload className="w-4 h-4 text-stone-500" />
-              <span>Загрузить резервную копию JSON с устройства</span>
+              <span>Загрузить резервную копию {desktop ? 'ZIP или JSON' : 'JSON'} с устройства</span>
             </button>
+
+            {pendingZip && (
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-stone-800 space-y-2.5">
+                <h4 className="text-xs font-bold text-amber-950">Заменить текущий архив проверенной ZIP-копией?</h4>
+                <p className="text-xs text-amber-800">
+                  {pendingZip.summary.persons} персон, {pendingZip.summary.relationships} связей, {pendingZip.summary.media} медиафайлов.
+                  Перед заменой будет сохранена резервная копия текущего архива.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => setPendingZip(null)} className="px-3 py-1.5 text-xs rounded-lg bg-white border border-stone-300">Отмена</button>
+                  <button type="button" onClick={handleRestoreZip} className="px-3 py-1.5 text-xs rounded-lg bg-amber-600 text-white">Восстановить архив</button>
+                </div>
+              </div>
+            )}
+
+            {pendingImport && (
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-stone-800 space-y-2.5">
+                <div>
+                  <h4 className="text-xs font-bold text-amber-950">Заменить текущий архив проверенной копией?</h4>
+                  <p className="text-xs text-amber-800 mt-0.5">
+                    Будет импортировано: {pendingImport.persons.length} персон, {pendingImport.relationships.length} связей и {pendingImport.mediaArchive?.length || 0} файлов.
+                  </p>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPendingImport(null)}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-stone-300 text-stone-700 hover:bg-stone-50"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onImportData(pendingImport);
+                      setPendingImport(null);
+                      setStatusMessage({ text: 'Семейный архив успешно загружен!', type: 'success' });
+                      setTimeout(onClose, 1200);
+                    }}
+                    className="px-3 py-1.5 text-xs font-bold rounded-lg bg-amber-600 hover:bg-amber-700 text-white"
+                  >
+                    Заменить архив
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {statusMessage && (
@@ -272,7 +380,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
               </div>
             )}
           </div>
-        </div>
+        </fieldset>
       </div>
     </div>
   );

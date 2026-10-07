@@ -1,11 +1,132 @@
 import { FamilyTreeData, Person, RelationshipRecord, MediaItem } from '../types/genealogy';
 import { EMPTY_TREE_DATA, INITIAL_DEMO_DATA } from '../data/demoFamily';
+import { isTauriDesktop, loadNativeTree, saveNativeTree } from './nativeTreeRepository';
 
 const DB_NAME = 'genealogy_heritage_db';
 const DB_VERSION = 1;
 const STORE_NAME = 'family_tree_store';
 const TREE_KEY = 'user_tree_data';
 const LOCAL_STORAGE_BACKUP_KEY = 'genealogy_user_tree_backup';
+let saveQueue: Promise<void> = Promise.resolve();
+
+const MEDIA_TYPES = new Set(['photo', 'document', 'video', 'audio']);
+const GENDERS = new Set(['male', 'female', 'other']);
+const RELATIONSHIP_TYPES = new Set([
+  'parent',
+  'child',
+  'spouse',
+  'former-spouse',
+  'sibling',
+  'adoptive-parent',
+  'adoptive-child',
+  'godparent',
+  'godchild',
+  'custom',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string';
+}
+
+function isValidFaceBox(value: unknown): boolean {
+  return isRecord(value)
+    && ['x', 'y', 'width', 'height'].every((key) => typeof value[key] === 'number' && Number.isFinite(value[key]));
+}
+
+function isValidFaceTag(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.mediaId !== 'string' || !isValidFaceBox(value.box)) {
+    return false;
+  }
+
+  return isOptionalString(value.personId)
+    && isOptionalString(value.suggestedPersonId)
+    && (value.descriptor === undefined || (Array.isArray(value.descriptor) && value.descriptor.length === 128 && value.descriptor.every((item) => typeof item === 'number' && Number.isFinite(item))))
+    && (value.confidence === undefined || typeof value.confidence === 'number')
+    && (value.suggestedScore === undefined || typeof value.suggestedScore === 'number')
+    && (value.isConfirmed === undefined || typeof value.isConfirmed === 'boolean')
+    && (value.createdAt === undefined || typeof value.createdAt === 'number');
+}
+
+function isValidMediaItem(value: unknown): boolean {
+  if (!isRecord(value)
+    || typeof value.id !== 'string'
+    || !MEDIA_TYPES.has(value.type as string)
+    || typeof value.name !== 'string'
+    || typeof value.dataUrl !== 'string') {
+    return false;
+  }
+
+  return isOptionalString(value.caption)
+    && isOptionalString(value.date)
+    && isOptionalString(value.mimeType)
+    && isOptionalString(value.originPersonId)
+    && (value.size === undefined || (typeof value.size === 'number' && Number.isFinite(value.size) && value.size >= 0))
+    && (value.isPrimaryAvatar === undefined || typeof value.isPrimaryAvatar === 'boolean')
+    && (value.manualPersonIds === undefined || (Array.isArray(value.manualPersonIds) && value.manualPersonIds.every((personId) => typeof personId === 'string')))
+    && (value.faces === undefined || (Array.isArray(value.faces) && value.faces.every(isValidFaceTag)));
+}
+
+function isValidPerson(value: unknown): boolean {
+  if (!isRecord(value)
+    || typeof value.id !== 'string'
+    || typeof value.firstName !== 'string'
+    || typeof value.lastName !== 'string'
+    || !GENDERS.has(value.gender as string)
+    || typeof value.isDeceased !== 'boolean'
+    || typeof value.bio !== 'string'
+    || !Array.isArray(value.significantDates)
+    || !Array.isArray(value.mediaFiles)
+    || !Array.isArray(value.tags)
+    || typeof value.createdAt !== 'number'
+    || typeof value.updatedAt !== 'number') {
+    return false;
+  }
+
+  const stringFields = [
+    value.patronymic,
+    value.maidenName,
+    value.birthDate,
+    value.birthPlace,
+    value.deathDate,
+    value.deathPlace,
+    value.avatarUrl,
+    value.occupation,
+    value.socialStatus,
+  ];
+
+  return stringFields.every(isOptionalString)
+    && (value.avatarFaceBox === undefined || isValidFaceBox(value.avatarFaceBox))
+    && value.tags.every((tag) => typeof tag === 'string')
+    && value.mediaFiles.every(isValidMediaItem)
+    && value.significantDates.every((date) => isRecord(date)
+      && typeof date.id === 'string'
+      && typeof date.title === 'string'
+      && typeof date.date === 'string'
+      && isOptionalString(date.location)
+      && isOptionalString(date.description)
+      && (date.category === undefined || ['life', 'career', 'military', 'education', 'award', 'estate', 'other'].includes(date.category as string)));
+}
+
+function isValidRelationship(value: unknown, personIds: Set<string>): boolean {
+  if (!isRecord(value)
+    || typeof value.id !== 'string'
+    || typeof value.person1Id !== 'string'
+    || typeof value.person2Id !== 'string'
+    || !RELATIONSHIP_TYPES.has(value.type as string)
+    || !personIds.has(value.person1Id)
+    || !personIds.has(value.person2Id)) {
+    return false;
+  }
+
+  return isOptionalString(value.customLabel)
+    && isOptionalString(value.startDate)
+    && isOptionalString(value.endDate)
+    && isOptionalString(value.notes);
+}
 
 /**
  * Open or create IndexedDB instance
@@ -98,6 +219,11 @@ export function normalizeTreeData(data: FamilyTreeData): FamilyTreeData {
  * Load tree data from IndexedDB or LocalStorage fallback
  */
 export async function loadFamilyTree(): Promise<FamilyTreeData> {
+  if (isTauriDesktop()) {
+    const data = await loadNativeTree();
+    return data ? normalizeTreeData(data) : EMPTY_TREE_DATA;
+  }
+
   try {
     const db = await openDatabase();
     return new Promise((resolve) => {
@@ -139,11 +265,27 @@ export async function loadFamilyTree(): Promise<FamilyTreeData> {
 /**
  * Save current tree data to IndexedDB + LocalStorage sync
  */
-export async function saveFamilyTree(data: FamilyTreeData): Promise<void> {
+export function saveFamilyTree(data: FamilyTreeData): Promise<void> {
+  const write = saveQueue.then(() => saveFamilyTreeNow(data));
+  // A rejected write must be reported to its caller but cannot block recovery.
+  saveQueue = write.catch(() => undefined);
+  return write;
+}
+
+export function waitForPendingSaves(): Promise<void> {
+  return saveQueue;
+}
+
+async function saveFamilyTreeNow(data: FamilyTreeData): Promise<void> {
   const updatedData: FamilyTreeData = {
     ...data,
     lastModified: Date.now()
   };
+
+  if (isTauriDesktop()) {
+    await saveNativeTree(updatedData);
+    return;
+  }
 
   // Always attempt LocalStorage backup (ignoring quota errors if media too large)
   try {
@@ -180,6 +322,7 @@ export async function saveFamilyTree(data: FamilyTreeData): Promise<void> {
     });
   } catch (error) {
     console.error('Failed to save in IndexedDB:', error);
+    throw error;
   }
 }
 
@@ -283,18 +426,32 @@ export function exportTreeAsGedcom(data: FamilyTreeData): void {
  * Validate imported JSON data
  */
 export function validateImportedData(raw: unknown): FamilyTreeData | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const obj = raw as Record<string, unknown>;
-  if (!Array.isArray(obj.persons) || !Array.isArray(obj.relationships)) return null;
+  if (!isRecord(raw)
+    || typeof raw.treeName !== 'string'
+    || (raw.description !== undefined && typeof raw.description !== 'string')
+    || !Array.isArray(raw.persons)
+    || !Array.isArray(raw.relationships)
+    || (raw.mediaArchive !== undefined && !Array.isArray(raw.mediaArchive))
+    || typeof raw.version !== 'number'
+    || typeof raw.lastModified !== 'number'
+    || !raw.persons.every(isValidPerson)
+    || (Array.isArray(raw.mediaArchive) && !raw.mediaArchive.every(isValidMediaItem))) {
+    return null;
+  }
+
+  const personIds = new Set(raw.persons.map((person) => (person as Person).id));
+  if (personIds.size !== raw.persons.length || !raw.relationships.every((relationship) => isValidRelationship(relationship, personIds))) {
+    return null;
+  }
 
   const validData: FamilyTreeData = {
-    treeName: typeof obj.treeName === 'string' ? obj.treeName : 'Моя родословная',
-    description: typeof obj.description === 'string' ? obj.description : '',
-    persons: obj.persons as Person[],
-    relationships: obj.relationships as RelationshipRecord[],
-    mediaArchive: Array.isArray(obj.mediaArchive) ? (obj.mediaArchive as MediaItem[]) : [],
-    version: 1,
-    lastModified: Date.now()
+    treeName: raw.treeName,
+    description: raw.description,
+    persons: raw.persons as Person[],
+    relationships: raw.relationships as RelationshipRecord[],
+    mediaArchive: Array.isArray(raw.mediaArchive) ? raw.mediaArchive as MediaItem[] : [],
+    version: raw.version,
+    lastModified: raw.lastModified,
   };
 
   return normalizeTreeData(validData);

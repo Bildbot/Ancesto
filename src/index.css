@@ -1,10 +1,16 @@
 @import "tailwindcss";
+@import "@fontsource-variable/lora";
+@import "@fontsource-variable/lora/wght-italic.css";
+@import "@fontsource-variable/plus-jakarta-sans";
+@import "@fontsource-variable/cinzel";
+@import "@fontsource-variable/jetbrains-mono";
 
 @layer base {
   :root {
-    --font-serif: 'Lora', Georgia, serif;
-    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-    --font-display: 'Cinzel', 'Lora', serif;
+    --font-serif: 'Lora Variable', Georgia, serif;
+    --font-sans: 'Plus Jakarta Sans Variable', system-ui, -apple-system, sans-serif;
+    --font-display: 'Cinzel Variable', 'Lora Variable', serif;
+    --font-mono: 'JetBrains Mono Variable', monospace;
   }
 
   body {
