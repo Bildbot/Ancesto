@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { Person, RelationshipRecord } from '../../types/genealogy';
-import { formatFullName, describeKinship } from '../../utils/kinship';
+import { formatFullName, describeKinship, isFormerMarriage } from '../../utils/kinship';
 import { ZoomIn, ZoomOut, RotateCcw, Users, Heart, Share2, Sparkles } from 'lucide-react';
 
 interface NetworkGraphViewProps {
@@ -135,8 +135,9 @@ export const NetworkGraphView: React.FC<NetworkGraphViewProps> = ({
       const n2 = coordMap.get(rel.person2Id);
       if (n1 && n2) {
         const isPrimary = n1.isCenter || n2.isCenter;
-        if (filterType === 'spouses' && rel.type !== 'spouse') return;
-        if (filterType === 'blood' && (rel.type === 'spouse' || rel.type === 'custom')) return;
+        const isMarriage = ['marriage', 'spouse', 'former-spouse'].includes(rel.type);
+        if (filterType === 'spouses' && !isMarriage) return;
+        if (filterType === 'blood' && (isMarriage || rel.type === 'custom')) return;
 
         edgeCoords.push({
           id: rel.id,
@@ -144,8 +145,8 @@ export const NetworkGraphView: React.FC<NetworkGraphViewProps> = ({
           y1: n1.y,
           x2: n2.x,
           y2: n2.y,
-          label: rel.type === 'spouse' 
-            ? 'Супруги' 
+          label: isMarriage
+            ? (isFormerMarriage(rel) ? 'Бывшие супруги' : 'Супруги')
             : (rel.type === 'parent' || rel.type === 'child' || rel.type === 'adoptive-parent' || rel.type === 'adoptive-child') 
             ? 'Родитель / Ребенок' 
             : 'Родство',
@@ -308,14 +309,14 @@ export const NetworkGraphView: React.FC<NetworkGraphViewProps> = ({
                   x2={edge.x2}
                   y2={edge.y2}
                   stroke={
-                    edge.type === 'spouse'
+                    ['marriage', 'spouse', 'former-spouse'].includes(edge.type)
                       ? '#f43f5e'
                       : edge.isPrimary
                       ? '#b45309'
                       : '#d6d3d1'
                   }
                   strokeWidth={edge.isPrimary ? 2.5 : 1.2}
-                  strokeDasharray={edge.type === 'spouse' ? '4 3' : undefined}
+                  strokeDasharray={['marriage', 'spouse', 'former-spouse'].includes(edge.type) ? '4 3' : undefined}
                   strokeOpacity={edge.isPrimary ? 0.9 : 0.4}
                 />
               </g>

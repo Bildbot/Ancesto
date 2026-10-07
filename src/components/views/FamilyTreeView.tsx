@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Person, RelationshipRecord, Gender, RelativeRole } from '../../types/genealogy';
-import { formatFullName, calculateAge, getParents, getChildren, getSpouses, getSiblings, formatDisplayDate } from '../../utils/kinship';
+import { formatFullName, calculateAge, pluralizeYears, getParents, getChildren, getSpouses, getSiblings, formatDisplayDate, isFormerMarriage } from '../../utils/kinship';
 import { 
   ZoomIn, 
   ZoomOut, 
@@ -54,6 +54,7 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
   const [pan, setPan] = useState({ x: 80, y: 80 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [hoveredPersonId, setHoveredPersonId] = useState<string | null>(null);
 
   // Touch tracking for pinch-to-zoom on mobile
   const [touchDistance, setTouchDistance] = useState<number | null>(null);
@@ -90,7 +91,7 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
       } else if (rel.type === 'child' || rel.type === 'adoptive-child') {
         adj.get(rel.person1Id)!.push({ targetId: rel.person2Id, delta: -1 });
         adj.get(rel.person2Id)!.push({ targetId: rel.person1Id, delta: 1 });
-      } else if (rel.type === 'spouse' || rel.type === 'former-spouse') {
+      } else if (rel.type === 'marriage' || rel.type === 'spouse' || rel.type === 'former-spouse') {
         adj.get(rel.person1Id)!.push({ targetId: rel.person2Id, delta: 0 });
         adj.get(rel.person2Id)!.push({ targetId: rel.person1Id, delta: 0 });
       } else if (rel.type === 'sibling') {
@@ -217,7 +218,7 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
 
       // Invariant A: Spouses match exactly
       for (const rel of relationships) {
-        if (rel.type === 'spouse' || rel.type === 'former-spouse') {
+        if (rel.type === 'marriage' || rel.type === 'spouse' || rel.type === 'former-spouse') {
           const g1 = genMap.get(rel.person1Id);
           const g2 = genMap.get(rel.person2Id);
           if (g1 !== undefined && g2 !== undefined && g1 !== g2) {
@@ -273,11 +274,12 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
 
   // Arrange nodes onto 2D layout grid
   const { layoutNodes, connections, generationBands } = useMemo(() => {
-    const CARD_WIDTH = 220;
-    const CARD_HEIGHT = 100;
+    const CARD_WIDTH = 260;
+    const CARD_HEIGHT = 140;
     const SPOUSE_GAP = 36;
     const UNIT_GAP = 56;
     const VERTICAL_GAP = 140;
+    const FORMER_ROW_GAP = 24;
 
     // Group persons by generation
     const byGen = new Map<number, Person[]>();
@@ -296,6 +298,7 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
     interface FamilyUnit {
       type: 'couple' | 'single';
       members: Person[];
+      formerMembers: { anchorId: string; person: Person }[];
       primaryYear: number;
       parentKey: string;
       width: number;
@@ -303,10 +306,47 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
 
     const genUnitsMap = new Map<number, FamilyUnit[]>();
     const genWidthsMap = new Map<number, number>();
+    const genFormerRowsMap = new Map<number, number>();
+    const generationYMap = new Map<number, number>();
 
     sortedGenerations.forEach(gen => {
       const genPersons = byGen.get(gen) || [];
+      const genPersonIds = new Set(genPersons.map(person => person.id));
+      const currentSpouseIds = new Set<string>();
+      relationships.forEach(rel => {
+        if (!['marriage', 'spouse'].includes(rel.type) || isFormerMarriage(rel) || !genPersonIds.has(rel.person1Id) || !genPersonIds.has(rel.person2Id)) return;
+        currentSpouseIds.add(rel.person1Id);
+        currentSpouseIds.add(rel.person2Id);
+      });
+
+      // Put former partners who have no current marriage in a lower sub-row.
+      // A current couple remains together on the primary row.
+      const formerOnlyIds = new Set<string>();
+      const formerByAnchor = new Map<string, Person[]>();
+      relationships.forEach(rel => {
+        if (!['marriage', 'former-spouse'].includes(rel.type) || !isFormerMarriage(rel) || !genPersonIds.has(rel.person1Id) || !genPersonIds.has(rel.person2Id)) return;
+
+        const firstIsCurrent = currentSpouseIds.has(rel.person1Id);
+        const secondIsCurrent = currentSpouseIds.has(rel.person2Id);
+        if (firstIsCurrent && secondIsCurrent) return;
+
+        let anchorId = firstIsCurrent ? rel.person1Id : secondIsCurrent ? rel.person2Id : rel.person1Id;
+        let formerId = anchorId === rel.person1Id ? rel.person2Id : rel.person1Id;
+        if (formerOnlyIds.has(anchorId)) {
+          [anchorId, formerId] = [formerId, anchorId];
+        }
+        if (currentSpouseIds.has(formerId) || formerOnlyIds.has(formerId)) return;
+
+        const formerPerson = genPersons.find(person => person.id === formerId);
+        if (!formerPerson) return;
+        formerOnlyIds.add(formerId);
+        const formerMembers = formerByAnchor.get(anchorId) || [];
+        if (!formerMembers.some(person => person.id === formerId)) formerMembers.push(formerPerson);
+        formerByAnchor.set(anchorId, formerMembers);
+      });
+
       const placedInGen = new Set<string>();
+      formerOnlyIds.forEach(id => placedInGen.add(id));
 
       const units: FamilyUnit[] = [];
 
@@ -314,8 +354,10 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
         if (placedInGen.has(person.id)) return;
 
         // Check if person has a spouse in this exact generation
-        const spouses = getSpouses(person.id, genPersons, relationships);
-        const spouseInGen = spouses.find(s => !placedInGen.has(s.person.id));
+        const spouseInGen = relationships
+          .filter(rel => ['marriage', 'spouse'].includes(rel.type) && !isFormerMarriage(rel) && (rel.person1Id === person.id || rel.person2Id === person.id))
+          .map(rel => genPersons.find(candidate => candidate.id === (rel.person1Id === person.id ? rel.person2Id : rel.person1Id)))
+          .find((spouse): spouse is Person => !!spouse && !placedInGen.has(spouse.id));
 
         const getYear = (p: Person) => {
           return p.birthDate ? parseInt(p.birthDate.match(/\d{4}/)?.[0] || '9999', 10) : 9999;
@@ -328,19 +370,20 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
 
         if (spouseInGen) {
           placedInGen.add(person.id);
-          placedInGen.add(spouseInGen.person.id);
+          placedInGen.add(spouseInGen.id);
 
           // Standard genealogical convention: put male on left, female on right
-          let coupleMembers = [person, spouseInGen.person];
-          if (person.gender === 'female' && spouseInGen.person.gender === 'male') {
-            coupleMembers = [spouseInGen.person, person];
+          let coupleMembers = [person, spouseInGen];
+          if (person.gender === 'female' && spouseInGen.gender === 'male') {
+            coupleMembers = [spouseInGen, person];
           }
 
           units.push({
             type: 'couple',
             members: coupleMembers,
-            primaryYear: Math.min(getYear(person), getYear(spouseInGen.person)),
-            parentKey: getParentKey(person) !== 'no_parent' ? getParentKey(person) : getParentKey(spouseInGen.person),
+            formerMembers: [],
+            primaryYear: Math.min(getYear(person), getYear(spouseInGen)),
+            parentKey: getParentKey(person) !== 'no_parent' ? getParentKey(person) : getParentKey(spouseInGen),
             width: CARD_WIDTH * 2 + SPOUSE_GAP
           });
         } else {
@@ -348,12 +391,27 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
           units.push({
             type: 'single',
             members: [person],
+            formerMembers: [],
             primaryYear: getYear(person),
             parentKey: getParentKey(person),
             width: CARD_WIDTH
           });
         }
       });
+
+      const unitByPersonId = new Map<string, FamilyUnit>();
+      units.forEach(unit => unit.members.forEach(member => unitByPersonId.set(member.id, unit)));
+      formerByAnchor.forEach((formerMembers, anchorId) => {
+        const unit = unitByPersonId.get(anchorId);
+        if (unit) unit.formerMembers.push(...formerMembers.map(person => ({ anchorId, person })));
+      });
+
+      const formerRows = units.reduce((max, unit) => {
+        const rowsByAnchor = new Map<string, number>();
+        unit.formerMembers.forEach(({ anchorId }) => rowsByAnchor.set(anchorId, (rowsByAnchor.get(anchorId) || 0) + 1));
+        return Math.max(max, ...rowsByAnchor.values(), 0);
+      }, 0);
+      genFormerRowsMap.set(gen, formerRows);
 
       // Sort units within generation: group siblings together by parents, then by birth year
       units.sort((a, b) => {
@@ -381,12 +439,19 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
     });
     const treeCenterX = Math.max(Math.round(maxRowWidth / 2) + 120, 700);
 
+    let nextGenerationY = 80;
+    sortedGenerations.forEach(gen => {
+      generationYMap.set(gen, nextGenerationY);
+      const formerRows = genFormerRowsMap.get(gen) || 0;
+      nextGenerationY += CARD_HEIGHT + formerRows * (CARD_HEIGHT + FORMER_ROW_GAP) + VERTICAL_GAP;
+    });
+
     // Position units per generation, centered around treeCenterX
     sortedGenerations.forEach(gen => {
       const units = genUnitsMap.get(gen) || [];
       const rowWidth = genWidthsMap.get(gen) || 0;
       let currentX = Math.round(treeCenterX - rowWidth / 2);
-      const y = 80 + gen * (CARD_HEIGHT + VERTICAL_GAP);
+      const y = generationYMap.get(gen) || 80;
 
       units.forEach(unit => {
         if (unit.type === 'couple') {
@@ -432,6 +497,25 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
 
           currentX += CARD_WIDTH + UNIT_GAP;
         }
+
+        const anchorNodes = unit.members.map(member => nodeMap.get(member.id)).filter(Boolean) as LayoutNode[];
+        const formerIndexByAnchor = new Map<string, number>();
+        unit.formerMembers.forEach(({ anchorId, person: formerPerson }) => {
+          const formerIndex = formerIndexByAnchor.get(anchorId) || 0;
+          formerIndexByAnchor.set(anchorId, formerIndex + 1);
+          const anchorNode = anchorNodes.find(node => node.person.id === anchorId);
+          if (!anchorNode) return;
+          const formerNode: LayoutNode = {
+            person: formerPerson,
+            x: Math.round(anchorNode.x + (anchorNode.width - CARD_WIDTH) / 2),
+            y: y + CARD_HEIGHT + FORMER_ROW_GAP + formerIndex * (CARD_HEIGHT + FORMER_ROW_GAP),
+            width: CARD_WIDTH,
+            height: CARD_HEIGHT,
+            generation: gen
+          };
+          nodes.push(formerNode);
+          nodeMap.set(formerPerson.id, formerNode);
+        });
       });
     });
 
@@ -466,9 +550,11 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
       id: string;
       path: string;
       type: 'parent-child' | 'spouse' | 'other';
+      personIds: string[];
       label?: string;
       color?: string;
       isSameGeneration?: boolean;
+      isSameRow?: boolean;
       isFormer?: boolean;
       x1?: number;
       x2?: number;
@@ -484,7 +570,7 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
     // 1. Spouses (specific horizontal link between couple cards on the same generation)
     const handledSpouses = new Set<string>();
     relationships.forEach(rel => {
-      if (rel.type === 'spouse' || rel.type === 'former-spouse') {
+      if (rel.type === 'marriage' || rel.type === 'spouse' || rel.type === 'former-spouse') {
         const key = [rel.person1Id, rel.person2Id].sort().join('__');
         if (handledSpouses.has(key)) return;
         handledSpouses.add(key);
@@ -496,17 +582,26 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
           const rightNode = node1.x < node2.x ? node2 : node1;
 
           const isSameGen = leftNode.generation === rightNode.generation;
-          const isFormer = rel.type === 'former-spouse';
-
-          const x1 = leftNode.x + leftNode.width;
-          const x2 = rightNode.x;
-          const y1 = leftNode.y + leftNode.height / 2;
-          const y2 = rightNode.y + rightNode.height / 2;
+          const isSameRow = isSameGen && leftNode.y === rightNode.y;
+          const isFormer = isFormerMarriage(rel);
 
           let path = '';
-          if (isSameGen) {
+          let x1 = leftNode.x + leftNode.width;
+          let x2 = rightNode.x;
+          let y1 = leftNode.y + leftNode.height / 2;
+          let y2 = rightNode.y + rightNode.height / 2;
+          if (isSameRow) {
             // Precise horizontal connector line between spouse cards
             path = `M ${x1} ${y1} L ${x2} ${y2}`;
+          } else if (isSameGen) {
+            const upperNode = leftNode.y < rightNode.y ? leftNode : rightNode;
+            const lowerNode = leftNode.y < rightNode.y ? rightNode : leftNode;
+            x1 = upperNode.x + upperNode.width / 2;
+            x2 = lowerNode.x + lowerNode.width / 2;
+            y1 = upperNode.y + upperNode.height;
+            y2 = lowerNode.y;
+            const midY = y1 + (y2 - y1) / 2;
+            path = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
           } else {
             // Smooth curve fallback if across generations
             const midX = x1 + (x2 - x1) / 2;
@@ -517,7 +612,9 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
             id: `spouse-${key}`,
             path,
             type: 'spouse',
+            personIds: [leftNode.person.id, rightNode.person.id],
             isSameGeneration: isSameGen,
+            isSameRow,
             isFormer,
             x1,
             x2,
@@ -525,8 +622,8 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
             midX: (x1 + x2) / 2,
             midY: (y1 + y2) / 2,
             label: isFormer ? 'Бывшие супруги' : 'Супружеский союз',
-            spouse1Name: `${leftNode.person.firstName} ${leftNode.person.lastName}`,
-            spouse2Name: `${rightNode.person.firstName} ${rightNode.person.lastName}`
+            spouse1Name: formatFullName(leftNode.person),
+            spouse2Name: formatFullName(rightNode.person)
           });
         }
       }
@@ -581,6 +678,7 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
           id: `pc-${pcKey}`,
           path,
           type: 'parent-child',
+          personIds: [upperNode.person.id, lowerNode.person.id],
           x1: startX,
           y: startY,
           x2: endX,
@@ -643,6 +741,7 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
         id: `pc-${rel.id}-${pcKey}`,
         path,
         type: 'parent-child',
+        personIds: [upperNode.person.id, lowerNode.person.id],
         x1: startX,
         y: startY,
         x2: endX,
@@ -690,7 +789,7 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
         gen,
         x: bandX,
         width: rowWidth,
-        y: 80 + gen * (CARD_HEIGHT + VERTICAL_GAP) - 28,
+        y: (generationYMap.get(gen) || 80) - 28,
         label: `${roman} Поколение · ${roleText} ${yearText}`.trim()
       };
     });
@@ -1026,15 +1125,20 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
             </defs>
 
             {connections.map(conn => {
+              const isRelatedToHoveredPerson = !!hoveredPersonId && conn.personIds.includes(hoveredPersonId);
+              const lineOpacity = hoveredPersonId
+                ? (isRelatedToHoveredPerson ? 1 : 0.1)
+                : 0.3;
+
               if (conn.type === 'spouse') {
-                const isSameLevel = conn.isSameGeneration && conn.x1 !== undefined && conn.x2 !== undefined && conn.y !== undefined;
+                const isSameLevel = conn.isSameRow && conn.x1 !== undefined && conn.x2 !== undefined && conn.y !== undefined;
                 const tooltipText = conn.spouse1Name && conn.spouse2Name 
                   ? `${conn.spouse1Name} и ${conn.spouse2Name} (${conn.label})` 
                   : (conn.label || 'Супружеский союз');
 
                 if (isSameLevel) {
                   return (
-                    <g key={conn.id} className="spouse-connector-group">
+                    <g key={conn.id} className="spouse-connector-group transition-opacity duration-200" opacity={lineOpacity}>
                       <title>{tooltipText}</title>
 
                       {/* 1. Soft glowing backdrop bridge between the two spouse cards */}
@@ -1102,7 +1206,7 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
 
                 // Fallback rendering if spouses are offset across different generations
                 return (
-                  <g key={conn.id} className="spouse-connector-group">
+                  <g key={conn.id} className="spouse-connector-group transition-opacity duration-200" opacity={lineOpacity}>
                     <title>{tooltipText}</title>
                     <path
                       d={conn.path}
@@ -1130,7 +1234,7 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
                 );
               }
               return (
-                <g key={conn.id} className="parent-child-connector-group">
+                <g key={conn.id} className="parent-child-connector-group transition-opacity duration-200" opacity={lineOpacity}>
                   {/* Clean soft backdrop line for contrast */}
                   <path
                     d={conn.path}
@@ -1165,8 +1269,10 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
           {layoutNodes.map(node => {
             const { person } = node;
             const fullName = formatFullName(person, { format: 'natural' });
+            const nameLines = person.patronymic?.trim()
+              ? [person.lastName.trim(), person.firstName.trim(), person.patronymic.trim()].filter(Boolean)
+              : [person.firstName.trim(), person.lastName.trim()].filter(Boolean);
             const ageInfo = calculateAge(person.birthDate, person.deathDate, person.isDeceased);
-
             const isMatchingSearch = searchQuery
               ? fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
                 (person.birthDate && person.birthDate.includes(searchQuery)) ||
@@ -1183,11 +1289,13 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
             return (
               <div
                 key={person.id}
+                onMouseEnter={() => setHoveredPersonId(person.id)}
+                onMouseLeave={() => setHoveredPersonId(null)}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectPerson(person.id);
                 }}
-                className={`card-clickable absolute rounded-xl transition-all duration-150 cursor-pointer select-none group ${
+                className={`card-clickable absolute rounded-xl overflow-hidden transition-all duration-150 cursor-pointer select-none group ${
                   isTargetFocused
                     ? 'ring-3 ring-amber-500 shadow-xl scale-102 bg-white'
                     : isHighlighted
@@ -1201,15 +1309,15 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
                   height: `${node.height}px`
                 }}
               >
-                <div className="p-3 h-full flex items-center gap-3">
-                  {/* Portrait / Monogram */}
-                  <div className="relative flex-shrink-0">
-                    <div className="w-12 h-12 rounded-xl bg-stone-200 overflow-hidden border border-stone-300 flex items-center justify-center">
-                      {person.avatarUrl ? (
-                        <img
-                          src={person.avatarUrl}
-                          alt=""
-                          className="w-full h-full object-cover"
+                  <div className="h-full flex items-stretch">
+                    {/* Portrait / Monogram */}
+                    <div className="relative h-full w-1/3 flex-shrink-0 bg-stone-200">
+                      <div className="h-full w-full overflow-hidden flex items-center justify-center">
+                        {person.avatarUrl ? (
+                          <img
+                            src={person.avatarUrl}
+                            alt=""
+                            className="w-full h-full object-cover"
                         />
                       ) : (
                         <div className="w-full h-full bg-stone-800 text-amber-200 flex items-center justify-center font-serif text-sm font-bold">
@@ -1220,18 +1328,20 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
                     </div>
                     {/* Gender badge */}
                     <span 
-                      className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full text-white flex items-center justify-center text-[9px] font-bold shadow-2xs ${
+                      className={`absolute bottom-2 right-2 w-4 h-4 rounded-full text-white flex items-center justify-center text-[9px] font-bold shadow-2xs ring-2 ring-white ${
                         person.gender === 'female' ? 'bg-rose-500' : 'bg-sky-600'
                       }`}
                     >
                       {person.gender === 'female' ? '♀' : '♂'}
                     </span>
-                  </div>
+                    </div>
 
-                  {/* Text details */}
-                  <div className="flex-1 min-w-0 pr-1">
-                    <h3 className="text-xs font-serif font-bold text-stone-900 truncate leading-tight group-hover:text-amber-900">
-                      {fullName}
+                    {/* Text details */}
+                    <div className="flex-1 min-w-0 p-2.5">
+                    <h3 className="text-xs font-serif font-bold text-stone-900 leading-tight group-hover:text-amber-900">
+                      {nameLines.map((part, index) => (
+                        <span key={`${index}-${part}`} className="block break-words">{part}</span>
+                      ))}
                     </h3>
                     
                     {person.maidenName && (
@@ -1240,10 +1350,15 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
                       </p>
                     )}
 
-                    <p className="text-[11px] font-mono font-medium text-amber-900 mt-0.5 truncate">
-                      {person.birthDate ? formatDisplayDate(person.birthDate) : '—'} 
-                      {person.isDeceased ? ` — ${person.deathDate ? formatDisplayDate(person.deathDate) : '†'}` : ''}
-                    </p>
+                    <div className="flex items-center justify-between gap-1 text-[11px] font-mono font-medium text-amber-900 mt-0.5">
+                      <span className="min-w-0 truncate">
+                        {person.birthDate ? formatDisplayDate(person.birthDate) : '—'}
+                        {person.isDeceased ? ` — ${person.deathDate ? formatDisplayDate(person.deathDate) : '†'}` : ''}
+                      </span>
+                      {person.birthDate && ageInfo.age !== undefined && (
+                        <span className="shrink-0">{ageInfo.age} {pluralizeYears(ageInfo.age)}</span>
+                      )}
+                    </div>
 
                     {person.occupation && (
                       <p className="text-[10px] text-stone-500 truncate mt-0.5">

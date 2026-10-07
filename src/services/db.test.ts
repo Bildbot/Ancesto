@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { saveFamilyTree, validateImportedData } from './db';
+import { normalizeTreeData, saveFamilyTree, validateImportedData } from './db';
 import type { FamilyTreeData, Person } from '../types/genealogy';
 import { INITIAL_DEMO_DATA } from '../data/demoFamily';
 
@@ -41,6 +41,38 @@ afterEach(() => {
 });
 
 describe('BackupService contract', () => {
+  it('normalizes legacy spouse records into one marriage and preserves an unknown end as ended', () => {
+    const normalized = normalizeTreeData({
+      ...treeData,
+      persons: [validPerson('person-1'), validPerson('person-2')],
+      relationships: [
+        { id: 'current-record', person1Id: 'person-1', person2Id: 'person-2', type: 'spouse', startDate: '1950' },
+        { id: 'former-record', person1Id: 'person-2', person2Id: 'person-1', type: 'former-spouse', startDate: '1950' },
+      ],
+    });
+
+    expect(normalized.relationships).toHaveLength(1);
+    expect(normalized.relationships[0]).toMatchObject({
+      type: 'marriage',
+      startDate: '1950',
+      endDateUnknown: true,
+    });
+  });
+
+  it('keeps unknown marriage start and distinguishes an ongoing marriage from unknown end', () => {
+    const normalized = normalizeTreeData({
+      ...treeData,
+      persons: [validPerson('person-1'), validPerson('person-2')],
+      relationships: [{ id: 'marriage', person1Id: 'person-1', person2Id: 'person-2', type: 'marriage' }],
+    });
+
+    expect(normalized.relationships[0]).toMatchObject({
+      type: 'marriage',
+      startDateUnknown: true,
+    });
+    expect(normalized.relationships[0].endDateUnknown).toBeUndefined();
+  });
+
   it('rejects a backup containing malformed people before it can replace current data', () => {
     const malformedBackup = {
       treeName: 'Повреждённый архив',
@@ -140,6 +172,33 @@ describe('BackupService contract', () => {
       persons: [validPerson('person-1')],
       relationships: [],
       mediaArchive: [],
+    };
+
+    expect(validateImportedData(backup)).not.toBeNull();
+  });
+
+  it('accepts persisted face review decisions and scan state', () => {
+    const backup = {
+      treeName: 'Архив с результатами распознавания',
+      version: 1,
+      lastModified: 1,
+      persons: [],
+      relationships: [],
+      mediaArchive: [{
+        id: 'photo-1',
+        type: 'photo',
+        name: 'Портрет',
+        dataUrl: 'data:image/jpeg;base64,AA==',
+        faceScanComplete: true,
+        faces: [{
+          id: 'face-1',
+          mediaId: 'photo-1',
+          box: { x: 10, y: 10, width: 20, height: 20 },
+          descriptor: Array(128).fill(0),
+          rejectedPersonIds: ['person-1'],
+          isConfirmed: false,
+        }],
+      }],
     };
 
     expect(validateImportedData(backup)).not.toBeNull();

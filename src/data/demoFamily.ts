@@ -443,7 +443,7 @@ export const INITIAL_DEMO_DATA: FamilyTreeData = {
   ],
   relationships: [
     // Николай Александрович + Софья Дмитриевна (Супруги)
-    { id: "r-1", person1Id: "p-101", person2Id: "p-102", type: "spouse", startDate: "1918-09-22" },
+    { id: "r-1", person1Id: "p-101", person2Id: "p-102", type: "marriage", startDate: "1918-09-22" },
     // Дети Николая и Софьи: Алексей и Владимир
     { id: "r-2", person1Id: "p-101", person2Id: "p-201", type: "parent" },
     { id: "r-3", person1Id: "p-102", person2Id: "p-201", type: "parent" },
@@ -451,13 +451,13 @@ export const INITIAL_DEMO_DATA: FamilyTreeData = {
     { id: "r-5", person1Id: "p-102", person2Id: "p-202", type: "parent" },
 
     // Владимир Ильич + Мария Павловна (Супруги Соколовы)
-    { id: "r-6", person1Id: "p-103", person2Id: "p-104", type: "spouse", startDate: "1924-05-10" },
+    { id: "r-6", person1Id: "p-103", person2Id: "p-104", type: "marriage", startDate: "1924-05-10" },
     // Дочь Соколовых: Елена
     { id: "r-7", person1Id: "p-103", person2Id: "p-203", type: "parent" },
     { id: "r-8", person1Id: "p-104", person2Id: "p-203", type: "parent" },
 
     // Алексей Морозов + Елена Соколова (Супруги)
-    { id: "r-9", person1Id: "p-201", person2Id: "p-203", type: "spouse", startDate: "1951-05-18" },
+    { id: "r-9", person1Id: "p-201", person2Id: "p-203", type: "marriage", startDate: "1951-05-18" },
     // Братья Алексей и Владимир Морозовы
     { id: "r-10", person1Id: "p-201", person2Id: "p-202", type: "sibling" },
 
@@ -469,13 +469,13 @@ export const INITIAL_DEMO_DATA: FamilyTreeData = {
     { id: "r-15", person1Id: "p-301", person2Id: "p-303", type: "sibling" },
 
     // Дмитрий Морозов + Татьяна Лебедева (Супруги)
-    { id: "r-16", person1Id: "p-301", person2Id: "p-302", type: "spouse", startDate: "1984-07-14" },
+    { id: "r-16", person1Id: "p-301", person2Id: "p-302", type: "marriage", startDate: "1984-07-14" },
     // Сын Дмитрия и Татьяны: Михаил
     { id: "r-17", person1Id: "p-301", person2Id: "p-401", type: "parent" },
     { id: "r-18", person1Id: "p-302", person2Id: "p-401", type: "parent" },
 
     // Михаил Морозов + Екатерина Смирнова (Супруги)
-    { id: "r-19", person1Id: "p-401", person2Id: "p-402", type: "spouse", startDate: "2014-08-16" },
+    { id: "r-19", person1Id: "p-401", person2Id: "p-402", type: "marriage", startDate: "2014-08-16" },
     // Дети Михаила и Екатерины: Анна и Лев
     { id: "r-20", person1Id: "p-401", person2Id: "p-403", type: "parent" },
     { id: "r-21", person1Id: "p-402", person2Id: "p-403", type: "parent" },

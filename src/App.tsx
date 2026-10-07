@@ -137,19 +137,16 @@ export default function App() {
             person2Id: savedPerson.id,
             type: 'parent'
           });
-        } else if (rel.role === 'spouse') {
+        } else if (rel.role === 'marriage') {
           updatedRelationships.push({
             id: uniqueId(),
             person1Id: rel.targetId,
             person2Id: savedPerson.id,
-            type: 'spouse'
-          });
-        } else if (rel.role === 'former-spouse') {
-          updatedRelationships.push({
-            id: uniqueId(),
-            person1Id: rel.targetId,
-            person2Id: savedPerson.id,
-            type: 'former-spouse'
+            type: 'marriage',
+            startDate: rel.startDate,
+            startDateUnknown: rel.startDateUnknown,
+            endDate: rel.endDate,
+            endDateUnknown: rel.endDateUnknown
           });
         } else if (rel.role === 'sibling') {
           updatedRelationships.push({
@@ -283,6 +280,24 @@ export default function App() {
     } catch (saveErr) {
       console.error('Failed to save media archive item:', saveErr);
       setSaveError('Не удалось сохранить файл в локальном архиве. Проверьте свободное место на диске и повторите попытку.');
+      throw saveErr;
+    }
+  }, []);
+
+  const handleUpdateFaceRecognitionData = useCallback(async (updatedPersons: Person[], updatedArchive: MediaItem[]) => {
+    const nextData: FamilyTreeData = {
+      ...treeDataRef.current,
+      persons: updatedPersons,
+      mediaArchive: updatedArchive,
+    };
+    treeDataRef.current = nextData;
+    setTreeData(nextData);
+    try {
+      await saveFamilyTree(nextData);
+      setSaveError(null);
+    } catch (saveErr) {
+      console.error('Failed to save face recognition changes:', saveErr);
+      setSaveError('Не удалось сохранить результаты распознавания. Проверьте свободное место на диске и повторите попытку.');
       throw saveErr;
     }
   }, []);
@@ -503,6 +518,7 @@ export default function App() {
             onSelectPerson={handleSelectPerson}
             onAddMediaToArchive={handleAddMediaToArchive}
             onDeleteMediaFromArchive={handleDeleteMediaFromArchive}
+            onUpdateFaceRecognitionData={handleUpdateFaceRecognitionData}
             onUpdatePersons={(updatedPersons) => {
               updateTreeData({
                 ...treeData,

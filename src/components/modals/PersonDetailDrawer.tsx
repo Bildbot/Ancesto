@@ -20,7 +20,8 @@ import {
   getDetailedSiblings,
   getOtherRelationships,
   describeKinship,
-  formatDisplayDate
+  formatDisplayDate,
+  isFormerMarriage
 } from '../../utils/kinship';
 import { 
   X, 
@@ -547,7 +548,7 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
               + Родитель
             </button>
             <button
-              onClick={() => onAddRelative(person.id, 'spouse')}
+              onClick={() => onAddRelative(person.id, 'marriage')}
               className="py-1.5 px-2 text-center rounded-lg bg-white hover:bg-stone-200/80 border border-stone-200 text-stone-700 text-[11px] font-medium transition"
               title={`Добавить супруга/супругу для ${formatFullName(person, { format: 'short' })}`}
             >
@@ -875,7 +876,7 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                                     title={!isSelf ? `Перейти к ${formatFullName(taggedPerson)}` : 'Текущая персона'}
                                   >
                                     <User className="w-2.5 h-2.5" />
-                                    <span>{taggedPerson.firstName} {taggedPerson.lastName}</span>
+                                    <span>{formatFullName(taggedPerson)}</span>
                                   </span>
                                 );
                               })}
@@ -1028,7 +1029,7 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                   </span>
                   <button
                     type="button"
-                    onClick={() => onAddRelative(person.id, 'spouse')}
+                    onClick={() => onAddRelative(person.id, 'marriage')}
                     className="text-[11px] font-medium text-amber-800 hover:text-amber-900 flex items-center gap-1 hover:underline"
                   >
                     <Plus className="w-3 h-3" />
@@ -1043,7 +1044,7 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                 ) : (
                   <div className="space-y-2">
                     {spouses.map(({ person: sp, rel }) => {
-                      const isFormer = rel.type === 'former-spouse';
+                      const isFormer = isFormerMarriage(rel);
                       return (
                         <div
                           key={sp.id}
@@ -1072,7 +1073,7 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                                   ? (sp.gender === 'female' ? 'Бывшая жена' : 'Бывший муж')
                                   : (sp.gender === 'female' ? 'Жена' : 'Муж')
                                 }
-                                {rel.startDate ? ` · Брак с ${rel.startDate.slice(0, 4)} г.` : ''}
+                                {` · Брак: ${rel.startDate ? formatDisplayDate(rel.startDate) : 'начало неизвестно'}${rel.endDate ? ` — ${formatDisplayDate(rel.endDate)}` : rel.endDateUnknown ? ' — окончание неизвестно' : ' — по настоящее время'}`}
                               </p>
                             </div>
                           </div>

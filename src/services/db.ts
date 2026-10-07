@@ -14,6 +14,7 @@ const GENDERS = new Set(['male', 'female', 'other']);
 const RELATIONSHIP_TYPES = new Set([
   'parent',
   'child',
+  'marriage',
   'spouse',
   'former-spouse',
   'sibling',
@@ -44,6 +45,7 @@ function isValidFaceTag(value: unknown): boolean {
 
   return isOptionalString(value.personId)
     && isOptionalString(value.suggestedPersonId)
+    && (value.rejectedPersonIds === undefined || (Array.isArray(value.rejectedPersonIds) && value.rejectedPersonIds.every((id) => typeof id === 'string')))
     && (value.descriptor === undefined || (Array.isArray(value.descriptor) && value.descriptor.length === 128 && value.descriptor.every((item) => typeof item === 'number' && Number.isFinite(item))))
     && (value.confidence === undefined || typeof value.confidence === 'number')
     && (value.suggestedScore === undefined || typeof value.suggestedScore === 'number')
@@ -64,6 +66,7 @@ function isValidMediaItem(value: unknown): boolean {
     && isOptionalString(value.date)
     && isOptionalString(value.mimeType)
     && isOptionalString(value.originPersonId)
+    && (value.faceScanComplete === undefined || typeof value.faceScanComplete === 'boolean')
     && (value.size === undefined || (typeof value.size === 'number' && Number.isFinite(value.size) && value.size >= 0))
     && (value.isPrimaryAvatar === undefined || typeof value.isPrimaryAvatar === 'boolean')
     && (value.manualPersonIds === undefined || (Array.isArray(value.manualPersonIds) && value.manualPersonIds.every((personId) => typeof personId === 'string')))
@@ -124,7 +127,9 @@ function isValidRelationship(value: unknown, personIds: Set<string>): boolean {
 
   return isOptionalString(value.customLabel)
     && isOptionalString(value.startDate)
+    && (value.startDateUnknown === undefined || typeof value.startDateUnknown === 'boolean')
     && isOptionalString(value.endDate)
+    && (value.endDateUnknown === undefined || typeof value.endDateUnknown === 'boolean')
     && isOptionalString(value.notes);
 }
 
@@ -160,12 +165,14 @@ export function normalizeTreeData(data: FamilyTreeData): FamilyTreeData {
   if (!data || !Array.isArray(data.relationships)) return data;
 
   const normalizedRels: RelationshipRecord[] = [];
-  const existingPairSet = new Set<string>();
+  const relationshipIndexes = new Map<string, number>();
 
   data.relationships.forEach((rel) => {
     let person1Id = rel.person1Id;
     let person2Id = rel.person2Id;
     let type = rel.type;
+    let startDateUnknown = rel.startDateUnknown;
+    let endDateUnknown = rel.endDateUnknown;
 
     if (type === 'child') {
       // In legacy records, person1Id was child, person2Id was parent.
@@ -179,15 +186,44 @@ export function normalizeTreeData(data: FamilyTreeData): FamilyTreeData {
       type = 'adoptive-parent';
     }
 
-    const pairKey = `${type}_${person1Id}_${person2Id}`;
-    if (!existingPairSet.has(pairKey)) {
-      existingPairSet.add(pairKey);
+    if (type === 'spouse' || type === 'former-spouse' || type === 'marriage') {
+      const wasFormer = type === 'former-spouse';
+      type = 'marriage';
+      if (rel.startDate) startDateUnknown = false;
+      else if (startDateUnknown === undefined) startDateUnknown = true;
+      if (rel.endDate) endDateUnknown = false;
+      else if (wasFormer && endDateUnknown === undefined) endDateUnknown = true;
+    }
+
+    const pairKey = type === 'marriage'
+      ? `marriage_${[person1Id, person2Id].sort().join('_')}`
+      : `${type}_${person1Id}_${person2Id}`;
+    const existingIndex = relationshipIndexes.get(pairKey);
+    if (existingIndex === undefined) {
+      relationshipIndexes.set(pairKey, normalizedRels.length);
       normalizedRels.push({
         ...rel,
         person1Id,
         person2Id,
-        type
+        type,
+        startDateUnknown,
+        endDateUnknown
       });
+    } else if (type === 'marriage') {
+      const existing = normalizedRels[existingIndex];
+      const startDate = existing.startDate || rel.startDate;
+      const incomingEnded = !!rel.endDate || endDateUnknown === true;
+      const existingEnded = !!existing.endDate || existing.endDateUnknown === true;
+      const preferIncomingEnd = incomingEnded && (!existingEnded || (!existing.endDate && !!rel.endDate));
+      normalizedRels[existingIndex] = {
+        ...existing,
+        startDate,
+        startDateUnknown: !!startDate ? false : true,
+        endDate: preferIncomingEnd ? rel.endDate : existing.endDate,
+        endDateUnknown: preferIncomingEnd
+          ? (!rel.endDate && endDateUnknown === true)
+          : (!existing.endDate && existing.endDateUnknown === true)
+      };
     }
   });
 

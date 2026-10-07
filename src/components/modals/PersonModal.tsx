@@ -20,7 +20,8 @@ import {
   getDetailedChildren,
   getDetailedSiblings,
   getOtherRelationships,
-  formatDisplayDate 
+  formatDisplayDate,
+  isFormerMarriage
 } from '../../utils/kinship';
 import { 
   X, 
@@ -52,8 +53,7 @@ import { AttachMediaModal } from './AttachMediaModal';
 export const RELATIONSHIP_ROLE_PRESETS: { role: RelativeRole; label: string; badgeLabel: string }[] = [
   { role: 'parent', label: 'Родитель для... (отец / мать)', badgeLabel: 'Родитель для' },
   { role: 'child', label: 'Ребёнок для... (сын / дочь)', badgeLabel: 'Ребёнок для' },
-  { role: 'spouse', label: 'Супруг(а) для...', badgeLabel: 'Супруг(а) для' },
-  { role: 'former-spouse', label: 'Бывший(ая) супруг(а) для...', badgeLabel: 'Бывший(ая) супруг(а) для' },
+  { role: 'marriage', label: 'Брак для...', badgeLabel: 'Брак для' },
   { role: 'sibling', label: 'Брат / Сестра для...', badgeLabel: 'Брат / Сестра для' },
   { role: 'adoptive-parent', label: 'Приёмный родитель для...', badgeLabel: 'Приёмный родитель для' },
   { role: 'adoptive-child', label: 'Приёмный ребёнок для...', badgeLabel: 'Приёмный ребёнок для' },
@@ -150,15 +150,24 @@ export const PersonModal: React.FC<PersonModalProps> = ({
     if (isOpen) {
       if (!person && defaultRelationshipTargetId && defaultRelationshipRole) {
         setPendingRelations([{ targetId: defaultRelationshipTargetId, role: defaultRelationshipRole }]);
+        setSelectedRelativeId(defaultRelationshipTargetId);
+        setSelectedRelRole(defaultRelationshipRole);
       } else if (!person) {
         setPendingRelations([]);
+        setSelectedRelativeId('');
+        setSelectedRelRole('parent');
       }
     }
   }, [isOpen, person, defaultRelationshipTargetId, defaultRelationshipRole]);
 
-  const [selectedRelativeId, setSelectedRelativeId] = useState('');
-  const [selectedRelRole, setSelectedRelRole] = useState<RelativeRole>('parent');
+  const [selectedRelativeId, setSelectedRelativeId] = useState(defaultRelationshipTargetId || '');
+  const [selectedRelRole, setSelectedRelRole] = useState<RelativeRole>(defaultRelationshipRole || 'parent');
   const [customRelLabel, setCustomRelLabel] = useState('');
+  const [relationshipStartDate, setRelationshipStartDate] = useState('');
+  const [relationshipStartDateUnknown, setRelationshipStartDateUnknown] = useState(false);
+  const [relationshipEndDate, setRelationshipEndDate] = useState('');
+  const [relationshipEndDateUnknown, setRelationshipEndDateUnknown] = useState(false);
+  const [relationshipDateError, setRelationshipDateError] = useState('');
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [inspectingFaceMedia, setInspectingFaceMedia] = useState<MediaItem | null>(null);
   const [isProcessingAvatar, setIsProcessingAvatar] = useState(false);
@@ -242,13 +251,36 @@ export const PersonModal: React.FC<PersonModalProps> = ({
   const handleAddPendingRelation = () => {
     if (!selectedRelativeId) return;
     if (selectedRelativeId === person?.id) return;
-    if (pendingRelations.some((r) => r.targetId === selectedRelativeId && r.role === selectedRelRole)) return;
+    if (selectedRelRole === 'marriage' && !relationshipStartDate.trim() && !relationshipStartDateUnknown) {
+      setRelationshipDateError('Укажите дату начала брака или отметьте, что она неизвестна.');
+      return;
+    }
+    const existingPending = pendingRelations.find((r) => r.targetId === selectedRelativeId && r.role === selectedRelRole);
+    if (existingPending) {
+      if (selectedRelRole === 'marriage') {
+        setPendingRelations((prev) => prev.map((r) => r === existingPending ? {
+          ...r,
+          startDate: relationshipStartDate.trim() ? formatDisplayDate(relationshipStartDate.trim()) : undefined,
+          startDateUnknown: relationshipStartDateUnknown,
+          endDate: relationshipEndDate.trim() ? formatDisplayDate(relationshipEndDate.trim()) : undefined,
+          endDateUnknown: relationshipEndDateUnknown
+        } : r));
+      }
+      setRelationshipDateError('');
+      return;
+    }
 
     const newItems: PendingRelationship[] = [
       {
         targetId: selectedRelativeId,
         role: selectedRelRole,
-        customLabel: selectedRelRole === 'custom' ? customRelLabel : undefined
+        customLabel: selectedRelRole === 'custom' ? customRelLabel : undefined,
+        startDate: selectedRelRole === 'marriage' && relationshipStartDate.trim()
+          ? formatDisplayDate(relationshipStartDate.trim()) : undefined,
+        startDateUnknown: selectedRelRole === 'marriage' ? relationshipStartDateUnknown : undefined,
+        endDate: selectedRelRole === 'marriage' && relationshipEndDate.trim()
+          ? formatDisplayDate(relationshipEndDate.trim()) : undefined,
+        endDateUnknown: selectedRelRole === 'marriage' ? relationshipEndDateUnknown : undefined
       }
     ];
 
@@ -270,6 +302,11 @@ export const PersonModal: React.FC<PersonModalProps> = ({
     setPendingRelations((prev) => [...prev, ...newItems]);
     setSelectedRelativeId('');
     setCustomRelLabel('');
+    setRelationshipStartDate('');
+    setRelationshipStartDateUnknown(false);
+    setRelationshipEndDate('');
+    setRelationshipEndDateUnknown(false);
+    setRelationshipDateError('');
     setLinkSpouseMode('none');
   };
 
@@ -281,6 +318,22 @@ export const PersonModal: React.FC<PersonModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!firstName.trim() && !lastName.trim()) return;
+    const relationsToSave = pendingRelations.map((rel) => {
+      if (rel.role !== 'marriage' || rel.targetId !== selectedRelativeId || selectedRelRole !== 'marriage') return rel;
+      return {
+        ...rel,
+        startDate: relationshipStartDate.trim() ? formatDisplayDate(relationshipStartDate.trim()) : undefined,
+        startDateUnknown: relationshipStartDateUnknown,
+        endDate: relationshipEndDate.trim() ? formatDisplayDate(relationshipEndDate.trim()) : undefined,
+        endDateUnknown: relationshipEndDateUnknown
+      };
+    });
+    if (relationsToSave.some((rel) => rel.role === 'marriage' && !rel.startDate && !rel.startDateUnknown)) {
+      setSelectedRelRole('marriage');
+      setRelationshipDateError('Укажите дату начала брака или отметьте, что она неизвестна.');
+      setActiveTab('relations');
+      return;
+    }
 
     const tags = tagsInput
       .split(',')
@@ -310,7 +363,7 @@ export const PersonModal: React.FC<PersonModalProps> = ({
       updatedAt: Date.now()
     };
 
-    onSave(savedPerson, pendingRelations);
+    onSave(savedPerson, relationsToSave);
     onClose();
   };
 
@@ -787,9 +840,14 @@ export const PersonModal: React.FC<PersonModalProps> = ({
                               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-stone-200 transition"
                             >
                               <Heart className="w-3 h-3 text-rose-500" />
-                              <span>{sp.gender === 'female' ? 'Жена:' : 'Муж:'}</span>
+                              <span>{isFormerMarriage(rel)
+                                ? (sp.gender === 'female' ? 'Бывшая жена:' : 'Бывший муж:')
+                                : (sp.gender === 'female' ? 'Жена:' : 'Муж:')}</span>
                               <strong>{formatFullName(sp, { format: 'short' })}</strong>
-                              {rel.startDate && <span className="text-[10px] text-stone-400">({rel.startDate.slice(0, 4)})</span>}
+                              <span className="text-[10px] text-stone-500">
+                                ({rel.startDate ? formatDisplayDate(rel.startDate) : 'начало неизвестно'}
+                                {rel.endDate ? ` — ${formatDisplayDate(rel.endDate)}` : rel.endDateUnknown ? ' — окончание неизвестно' : ' — по настоящее время'})
+                              </span>
                               <ExternalLink className="w-3 h-3 text-stone-400" />
                             </button>
                             {onDeleteRelationship && (
@@ -989,11 +1047,8 @@ export const PersonModal: React.FC<PersonModalProps> = ({
                           <option value="parent">
                             {targetName ? `Родитель для ${targetName} (отец / мать)` : 'Родитель для... (отец / мать, указанный станет ребёнком)'}
                           </option>
-                          <option value="spouse">
-                            {targetName ? `Супруг(а) для ${targetName}` : 'Супруг(а) для... (брачный союз)'}
-                          </option>
-                          <option value="former-spouse">
-                            {targetName ? `Бывший(ая) супруг(а) для ${targetName}` : 'Бывший(ая) супруг(а) для...'}
+                          <option value="marriage">
+                            {targetName ? `Брак с ${targetName}` : 'Брак с...'}
                           </option>
                           <option value="sibling">
                             {targetName ? `Брат / Сестра для ${targetName}` : 'Брат / Сестра для... (родные)'}
@@ -1017,6 +1072,58 @@ export const PersonModal: React.FC<PersonModalProps> = ({
                       );
                     })()}
                   </div>
+
+                  {selectedRelRole === 'marriage' && (
+                    <div className="sm:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl border border-rose-200 bg-rose-50/60 p-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-stone-700 mb-1">Дата начала брака</label>
+                        <input
+                          type="text"
+                          value={relationshipStartDate}
+                          disabled={relationshipStartDateUnknown}
+                          onChange={(e) => { setRelationshipStartDate(e.target.value); setRelationshipDateError(''); }}
+                          placeholder="ДД.ММ.ГГГГ или год"
+                          className="w-full px-3 py-2 text-xs rounded-lg border border-stone-300 bg-white text-stone-900"
+                        />
+                        <label className="mt-2 flex items-center gap-2 text-[11px] text-stone-600">
+                          <input
+                            type="checkbox"
+                            checked={relationshipStartDateUnknown}
+                            onChange={(e) => {
+                              setRelationshipStartDateUnknown(e.target.checked);
+                              if (e.target.checked) setRelationshipStartDate('');
+                              setRelationshipDateError('');
+                            }}
+                          />
+                          Дата начала неизвестна
+                        </label>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-stone-700 mb-1">Дата окончания брака</label>
+                        <input
+                          type="text"
+                          value={relationshipEndDate}
+                          disabled={relationshipEndDateUnknown}
+                          onChange={(e) => setRelationshipEndDate(e.target.value)}
+                          placeholder="ДД.ММ.ГГГГ или год"
+                          className="w-full px-3 py-2 text-xs rounded-lg border border-stone-300 bg-white text-stone-900"
+                        />
+                        <label className="mt-2 flex items-center gap-2 text-[11px] text-stone-600">
+                          <input
+                            type="checkbox"
+                            checked={relationshipEndDateUnknown}
+                            onChange={(e) => {
+                              setRelationshipEndDateUnknown(e.target.checked);
+                              if (e.target.checked) setRelationshipEndDate('');
+                            }}
+                          />
+                          Брак закончен, дата неизвестна
+                        </label>
+                        <p className="mt-1 text-[10px] text-stone-500">Оставьте поле и флажок пустыми, если брак продолжается.</p>
+                      </div>
+                      {relationshipDateError && <p className="sm:col-span-2 text-[11px] text-red-700">{relationshipDateError}</p>}
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-xs font-semibold text-stone-700 mb-1">
@@ -1111,7 +1218,11 @@ export const PersonModal: React.FC<PersonModalProps> = ({
                   const target = allPersons.find((p) => p.id === selectedRelativeId);
                   const currentName = person 
                     ? formatFullName(person, { format: 'natural' }) 
-                    : (firstName.trim() ? `${firstName.trim()} ${lastName.trim()}`.trim() : 'Создаваемая персона');
+                    : (firstName.trim() || lastName.trim()
+                      ? (patronymic.trim()
+                        ? [lastName.trim(), firstName.trim(), patronymic.trim()].filter(Boolean).join(' ')
+                        : [firstName.trim(), lastName.trim()].filter(Boolean).join(' '))
+                      : 'Создаваемая персона');
                   const targetName = target ? formatFullName(target, { format: 'natural' }) : 'выбранный человек';
 
                   let explanation = '';
@@ -1119,10 +1230,8 @@ export const PersonModal: React.FC<PersonModalProps> = ({
                     explanation = `«${currentName}» будет родителем (отцом / матерью), а «${targetName}» — её ребёнком`;
                   } else if (selectedRelRole === 'child') {
                     explanation = `«${targetName}» будет родителем, а «${currentName}» — её ребёнком (сыном / дочерью)`;
-                  } else if (selectedRelRole === 'spouse') {
-                    explanation = `«${currentName}» и «${targetName}» будут связаны как супруги`;
-                  } else if (selectedRelRole === 'former-spouse') {
-                    explanation = `«${currentName}» и «${targetName}» будут связаны как бывшие супруги`;
+                    } else if (selectedRelRole === 'marriage') {
+                      explanation = `«${currentName}» и «${targetName}» будут связаны одним браком; его статус определяется датой окончания`;
                   } else if (selectedRelRole === 'sibling') {
                     explanation = `«${currentName}» и «${targetName}» будут родными братьями / сёстрами`;
                   } else if (selectedRelRole === 'adoptive-parent') {
@@ -1183,6 +1292,12 @@ export const PersonModal: React.FC<PersonModalProps> = ({
                             <span className="text-stone-900 font-semibold">
                               {target ? formatFullName(target) : 'Персона ' + rel.targetId}
                             </span>
+                            {rel.role === 'marriage' && (
+                              <span className="text-[10px] text-stone-500">
+                                {rel.startDate ? formatDisplayDate(rel.startDate) : 'начало неизвестно'}
+                                {rel.endDate ? ` — ${formatDisplayDate(rel.endDate)}` : rel.endDateUnknown ? ' — окончание неизвестно' : ' — по настоящее время'}
+                              </span>
+                            )}
                           </div>
                           <button
                             type="button"

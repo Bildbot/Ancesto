@@ -231,6 +231,116 @@ export function matchFaceToPersons(
   return {};
 }
 
+export interface FaceReviewCandidate {
+  media: MediaItem;
+  face: FaceTag;
+}
+
+export interface FaceReviewCluster {
+  id: string;
+  candidates: FaceReviewCandidate[];
+  representative: FaceReviewCandidate;
+}
+
+const UNKNOWN_FACE_CLUSTER_THRESHOLD = 0.58;
+
+function descriptorDistance(left: number[], right: number[]): number {
+  return Math.sqrt(left.reduce((sum, value, index) => sum + (value - right[index]) ** 2, 0));
+}
+
+/** Group unlabeled faces by descriptor for a human identity review workflow. */
+export function clusterUnassignedFaces(candidates: FaceReviewCandidate[]): FaceReviewCluster[] {
+  const validCandidates = candidates
+    .filter(({ face }) => !face.personId && !face.isConfirmed && face.descriptor?.length === 128)
+    .sort((left, right) => {
+      const leftArea = left.face.box.width * left.face.box.height;
+      const rightArea = right.face.box.width * right.face.box.height;
+      return rightArea - leftArea || (right.face.confidence || 0) - (left.face.confidence || 0);
+    });
+
+  const clusters: Array<{ candidates: FaceReviewCandidate[]; centroid: number[] }> = [];
+  for (const candidate of validCandidates) {
+    const descriptor = candidate.face.descriptor!;
+    let bestCluster: typeof clusters[number] | undefined;
+    let bestDistance = UNKNOWN_FACE_CLUSTER_THRESHOLD;
+
+    for (const cluster of clusters) {
+      if (cluster.candidates.some((item) => item.media.id === candidate.media.id)) continue;
+      const distance = descriptorDistance(descriptor, cluster.centroid);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        bestCluster = cluster;
+      }
+    }
+
+    if (!bestCluster) {
+      clusters.push({ candidates: [candidate], centroid: [...descriptor] });
+      continue;
+    }
+
+    const previousCount = bestCluster.candidates.length;
+    bestCluster.centroid = bestCluster.centroid.map((value, index) => (
+      (value * previousCount + descriptor[index]) / (previousCount + 1)
+    ));
+    bestCluster.candidates.push(candidate);
+  }
+
+  return clusters.map(({ candidates: items }, index) => ({
+    id: `face-cluster-${index}-${items[0].face.id}`,
+    candidates: items,
+    representative: items[0]
+  }));
+}
+
+/** Persist a yes/no face decision while keeping rejected faces unassigned in the archive. */
+export function applyFaceReviewDecision(
+  persons: Person[],
+  mediaArchive: MediaItem[],
+  mediaId: string,
+  faceId: string,
+  reviewedPersonId: string,
+  isSamePerson: boolean
+): { persons: Person[]; mediaArchive: MediaItem[] } {
+  const updatedArchive = mediaArchive.map((media) => {
+    if (media.id !== mediaId) return media;
+    return {
+      ...media,
+      faces: media.faces?.map((face) => {
+        if (face.id !== faceId) return face;
+        if (isSamePerson) {
+          return {
+            ...face,
+            personId: reviewedPersonId,
+            isConfirmed: true,
+            suggestedPersonId: undefined,
+            suggestedScore: undefined,
+            rejectedPersonIds: face.rejectedPersonIds?.filter((id) => id !== reviewedPersonId)
+          };
+        }
+        return {
+          ...face,
+          personId: undefined,
+          isConfirmed: false,
+          suggestedPersonId: undefined,
+          suggestedScore: undefined,
+          rejectedPersonIds: Array.from(new Set([...(face.rejectedPersonIds || []), reviewedPersonId]))
+        };
+      })
+    };
+  });
+
+  const updatedMedia = updatedArchive.find((media) => media.id === mediaId);
+  let updatedPersons = persons.map((person) => ({
+    ...person,
+    mediaFiles: person.mediaFiles.map((media) => media.id === mediaId && updatedMedia ? updatedMedia : media)
+  }));
+  if (isSamePerson && updatedMedia) {
+    updatedPersons = attachMediaToPerson(updatedPersons, reviewedPersonId, updatedMedia);
+  }
+
+  return { persons: updatedPersons, mediaArchive: updatedArchive };
+}
+
 /**
  * Re-evaluate and match all unconfirmed faces across all persons
  * using all currently confirmed face references.

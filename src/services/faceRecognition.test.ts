@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@vladmandic/face-api', () => ({}));
 
-import { attachMediaToPerson, detachMediaFromPerson, syncTaggedMediaAcrossPersons } from './faceRecognition';
+import {
+  applyFaceReviewDecision,
+  attachMediaToPerson,
+  clusterUnassignedFaces,
+  detachMediaFromPerson,
+  syncTaggedMediaAcrossPersons,
+} from './faceRecognition';
 import type { MediaItem, Person } from '../types/genealogy';
 
 const sharedDocument: MediaItem = {
@@ -85,5 +91,66 @@ describe('MediaAttachmentService contract', () => {
 
     expect(result[1].mediaFiles).toHaveLength(1);
     expect(result[1].mediaFiles[0].faces?.[0].personId).toBe('person-a');
+  });
+
+  it('clusters similar unknown faces while keeping different people in separate clusters', () => {
+    const descriptor = (first: number) => [first, ...Array(127).fill(0)];
+    const candidate = (mediaId: string, faceId: string, first: number) => ({
+      media: { ...sharedDocument, id: mediaId, type: 'photo' as const },
+      face: {
+        id: faceId,
+        mediaId,
+        box: { x: 10, y: 10, width: 20, height: 20 },
+        descriptor: descriptor(first),
+      },
+    });
+
+    const clusters = clusterUnassignedFaces([
+      candidate('photo-a', 'face-a', 0),
+      candidate('photo-b', 'face-b', 0.2),
+      candidate('photo-c', 'face-c', 1.2),
+      { ...candidate('photo-d', 'face-confirmed', 0.01), face: { ...candidate('photo-d', 'face-confirmed', 0.01).face, personId: 'person-a', isConfirmed: true } },
+    ]);
+
+    expect(clusters.map((cluster) => cluster.candidates.map(({ face }) => face.id))).toEqual([
+      ['face-a', 'face-b'],
+      ['face-c'],
+    ]);
+  });
+
+  it('leaves a rejected face unassigned in the archive and remembers the rejected person', () => {
+    const face = {
+      id: 'face-1',
+      mediaId: 'photo-1',
+      box: { x: 10, y: 10, width: 20, height: 20 },
+      descriptor: Array(128).fill(0),
+    };
+    const photo = { ...sharedDocument, id: 'photo-1', type: 'photo' as const, faces: [face] };
+    const result = applyFaceReviewDecision([], [photo], 'photo-1', 'face-1', 'person-a', false);
+
+    expect(result.mediaArchive[0].faces?.[0]).toMatchObject({
+      personId: undefined,
+      isConfirmed: false,
+      rejectedPersonIds: ['person-a'],
+    });
+    expect(result.persons).toEqual([]);
+  });
+
+  it('confirms a face, attaches its photo to the selected person, and clears their rejection', () => {
+    const face = {
+      id: 'face-1',
+      mediaId: 'photo-1',
+      box: { x: 10, y: 10, width: 20, height: 20 },
+      descriptor: Array(128).fill(0),
+      rejectedPersonIds: ['person-a'],
+    };
+    const photo = { ...sharedDocument, id: 'photo-1', type: 'photo' as const, faces: [face] };
+    const result = applyFaceReviewDecision(
+      [person('person-a', [])], [photo], 'photo-1', 'face-1', 'person-a', true,
+    );
+
+    expect(result.mediaArchive[0].faces?.[0]).toMatchObject({ personId: 'person-a', isConfirmed: true });
+    expect(result.mediaArchive[0].faces?.[0].rejectedPersonIds).toEqual([]);
+    expect(result.persons[0].mediaFiles.map((media) => media.id)).toContain('photo-1');
   });
 });

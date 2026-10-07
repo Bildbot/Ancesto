@@ -18,8 +18,8 @@ export function removeRelationship(
     if (type === 'parent' || type === 'child' || type === 'adoptive-parent' || type === 'adoptive-child') {
       return !['parent', 'child', 'adoptive-parent', 'adoptive-child'].includes(relationship.type);
     }
-    if (type === 'spouse' || type === 'former-spouse') {
-      return !['spouse', 'former-spouse'].includes(relationship.type);
+    if (type === 'marriage' || type === 'spouse' || type === 'former-spouse') {
+      return !['marriage', 'spouse', 'former-spouse'].includes(relationship.type);
     }
     return relationship.type !== type;
   });

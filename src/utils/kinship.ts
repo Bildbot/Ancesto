@@ -1,7 +1,8 @@
 import { Person, RelationshipRecord, Gender, RelationshipType } from '../types/genealogy';
 
 /**
- * Format Russian full name: Фамилия Имя Отчество or Имя Отчество Фамилия
+ * Format a full name as Фамилия Имя Отчество when patronymic is known.
+ * Without a patronymic, preserve the common Имя Фамилия order.
  */
 export function formatFullName(person: Person, options?: { format?: 'formal' | 'natural' | 'short'; includeMaiden?: boolean }): string {
   const { format = 'natural', includeMaiden = true } = options || {};
@@ -11,19 +12,16 @@ export function formatFullName(person: Person, options?: { format?: 'formal' | '
   const maiden = (includeMaiden && person.maidenName?.trim()) ? ` (${person.maidenName.trim()})` : '';
 
   if (format === 'short') {
+    if (!pat) return [first, last + maiden].filter(Boolean).join(' ');
     const fInitial = first ? `${first[0]}.` : '';
     const pInitial = pat ? `${pat[0]}.` : '';
     return `${last} ${fInitial}${pInitial}`.trim() || first;
   }
 
-  if (format === 'formal') {
-    // "Морозов Алексей Николаевич"
-    const parts = [last + maiden, first, pat].filter(Boolean);
-    return parts.join(' ');
-  }
-
-  // "Алексей Николаевич Морозов"
-  const parts = [first, pat, last + maiden].filter(Boolean);
+  const familyName = last + maiden;
+  const parts = pat
+    ? [familyName, first, pat]
+    : [first, familyName];
   return parts.join(' ');
 }
 
@@ -236,6 +234,12 @@ export interface DetailedSpouse {
   rel: RelationshipRecord;
 }
 
+export function isFormerMarriage(rel: RelationshipRecord): boolean {
+  return rel.type === 'former-spouse'
+    || (rel.type === 'marriage' || rel.type === 'spouse')
+      && (!!rel.endDate || rel.endDateUnknown === true);
+}
+
 /**
  * Returns spouses/partners of a person
  */
@@ -243,7 +247,7 @@ export function getSpouses(personId: string, persons: Person[], relationships: R
   const results: { person: Person; rel: RelationshipRecord }[] = [];
 
   for (const rel of relationships) {
-    if (rel.type === 'spouse' || rel.type === 'former-spouse') {
+    if (rel.type === 'marriage' || rel.type === 'spouse' || rel.type === 'former-spouse') {
       let partnerId: string | null = null;
       if (rel.person1Id === personId) partnerId = rel.person2Id;
       else if (rel.person2Id === personId) partnerId = rel.person1Id;
@@ -389,8 +393,11 @@ export function describeKinship(fromPerson: Person, toPerson: Person, persons: P
     if (rel.person1Id === fromPerson.id && rel.person2Id === toPerson.id) {
       if (rel.type === 'parent') return fromPerson.gender === 'female' ? 'Мать' : 'Отец';
       if (rel.type === 'child') return fromPerson.gender === 'female' ? 'Дочь' : 'Сын';
-      if (rel.type === 'spouse') return fromPerson.gender === 'female' ? 'Жена' : 'Муж';
-      if (rel.type === 'former-spouse') return fromPerson.gender === 'female' ? 'Бывшая жена' : 'Бывший муж';
+      if (rel.type === 'marriage' || rel.type === 'spouse' || rel.type === 'former-spouse') {
+        return isFormerMarriage(rel)
+          ? (fromPerson.gender === 'female' ? 'Бывшая жена' : 'Бывший муж')
+          : (fromPerson.gender === 'female' ? 'Жена' : 'Муж');
+      }
       if (rel.type === 'sibling') return fromPerson.gender === 'female' ? 'Сестра' : 'Брат';
       if (rel.type === 'adoptive-parent') return fromPerson.gender === 'female' ? 'Приёмная мать' : 'Приёмный отец';
       if (rel.type === 'adoptive-child') return fromPerson.gender === 'female' ? 'Приёмная дочь' : 'Приёмный сын';
@@ -401,8 +408,11 @@ export function describeKinship(fromPerson: Person, toPerson: Person, persons: P
     if (rel.person2Id === fromPerson.id && rel.person1Id === toPerson.id) {
       if (rel.type === 'parent') return fromPerson.gender === 'female' ? 'Дочь' : 'Сын';
       if (rel.type === 'child') return fromPerson.gender === 'female' ? 'Мать' : 'Отец';
-      if (rel.type === 'spouse') return fromPerson.gender === 'female' ? 'Жена' : 'Муж';
-      if (rel.type === 'former-spouse') return fromPerson.gender === 'female' ? 'Бывшая жена' : 'Бывший муж';
+      if (rel.type === 'marriage' || rel.type === 'spouse' || rel.type === 'former-spouse') {
+        return isFormerMarriage(rel)
+          ? (fromPerson.gender === 'female' ? 'Бывшая жена' : 'Бывший муж')
+          : (fromPerson.gender === 'female' ? 'Жена' : 'Муж');
+      }
       if (rel.type === 'sibling') return fromPerson.gender === 'female' ? 'Сестра' : 'Брат';
       if (rel.type === 'adoptive-parent') return fromPerson.gender === 'female' ? 'Приёмная дочь' : 'Приёмный сын';
       if (rel.type === 'adoptive-child') return fromPerson.gender === 'female' ? 'Приёмная мать' : 'Приёмный отец';
@@ -500,8 +510,7 @@ export function describeKinship(fromPerson: Person, toPerson: Person, persons: P
 export const RELATIONSHIP_PRESETS: { value: RelationshipType; label: string; reciprocalLabel: string }[] = [
   { value: 'parent', label: 'Родитель (отец / мать)', reciprocalLabel: 'Ребёнок (сын / дочь)' },
   { value: 'child', label: 'Ребёнок (сын / дочь)', reciprocalLabel: 'Родитель (отец / мать)' },
-  { value: 'spouse', label: 'Супруг(а)', reciprocalLabel: 'Супруг(а)' },
-  { value: 'former-spouse', label: 'Бывший(ая) супруг(а)', reciprocalLabel: 'Бывший(ая) супруг(а)' },
+  { value: 'marriage', label: 'Брак', reciprocalLabel: 'Брак' },
   { value: 'sibling', label: 'Брат / Сестра', reciprocalLabel: 'Брат / Сестра' },
   { value: 'adoptive-parent', label: 'Приёмный родитель', reciprocalLabel: 'Приёмный ребёнок' },
   { value: 'adoptive-child', label: 'Приёмный ребёнок', reciprocalLabel: 'Приёмный родитель' },

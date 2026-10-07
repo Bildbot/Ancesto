@@ -3,8 +3,9 @@ export type Gender = 'male' | 'female' | 'other';
 export type RelationshipType = 
   | 'parent'          // person1 is parent of person2
   | 'child'           // person1 is child of person2
-  | 'spouse'          // married or partner
-  | 'former-spouse'   // ex-spouse
+  | 'marriage'        // one marriage record; status is derived from end date state
+  | 'spouse'          // legacy format, normalized to marriage when loaded
+  | 'former-spouse'   // legacy format, normalized to marriage when loaded
   | 'sibling'         // brother / sister
   | 'adoptive-parent' // усыновитель / приемный родитель
   | 'adoptive-child'  // усыновленный ребенок
@@ -15,8 +16,7 @@ export type RelationshipType =
 export type RelativeRole = 
   | 'parent'          // Создаваемая персона является родителем для targetId
   | 'child'           // Создаваемая персона является ребёнком для targetId
-  | 'spouse'          // Создаваемая персона является супругом(ой) для targetId
-  | 'former-spouse'   // Создаваемая персона является бывшим(ей) супругом(ой) для targetId
+  | 'marriage'        // Создаваемая персона вступает в брак с targetId
   | 'sibling'         // Создаваемая персона является братом/сестрой для targetId
   | 'adoptive-parent'
   | 'adoptive-child'
@@ -28,6 +28,10 @@ export interface PendingRelationship {
   targetId: string;
   role: RelativeRole;
   customLabel?: string;
+  startDate?: string;
+  startDateUnknown?: boolean;
+  endDate?: string;
+  endDateUnknown?: boolean;
 }
 
 export interface SignificantDate {
@@ -57,6 +61,7 @@ export interface FaceTag {
   confidence?: number;        // Face detector confidence (0 to 1)
   suggestedPersonId?: string; // AI / Smart-match suggested person ID
   suggestedScore?: number;    // Match similarity percentage (0-100)
+  rejectedPersonIds?: string[]; // Persons this face was manually rejected for
   isConfirmed?: boolean;      // True if user confirmed, false if pending suggestion
   createdAt?: number;
 }
@@ -72,6 +77,7 @@ export interface MediaItem {
   size?: number; // In bytes
   isPrimaryAvatar?: boolean; // Set as profile portrait
   faces?: FaceTag[]; // Detected or tagged faces on this photo
+  faceScanComplete?: boolean; // Whether automatic face detection has completed
   originPersonId?: string; // ID of person who originally uploaded this file
   manualPersonIds?: string[]; // Explicit attachments independent of face tags
 }
@@ -107,7 +113,9 @@ export interface RelationshipRecord {
   type: RelationshipType;  // person1 relation to person2
   customLabel?: string;    // Custom relationship string if type === 'custom'
   startDate?: string;      // e.g. marriage date
+  startDateUnknown?: boolean;
   endDate?: string;
+  endDateUnknown?: boolean; // ended, but date is unknown; no end date/flag means ongoing
   notes?: string;
 }
 

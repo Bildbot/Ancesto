@@ -43,6 +43,7 @@ interface ArchiveMediaViewProps {
   mediaArchive?: MediaItem[];
   onSelectPerson: (personId: string) => void;
   onUpdatePersons?: (updatedPersons: Person[]) => void;
+  onUpdateFaceRecognitionData?: (updatedPersons: Person[], updatedArchive: MediaItem[]) => void | Promise<void>;
   onAddMediaToArchive?: (newItems: MediaItem[]) => void | Promise<void>;
   onDeleteMediaFromArchive?: (mediaId: string) => void;
 }
@@ -61,6 +62,7 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
   mediaArchive = [],
   onSelectPerson,
   onUpdatePersons,
+  onUpdateFaceRecognitionData,
   onAddMediaToArchive,
   onDeleteMediaFromArchive
 }) => {
@@ -208,10 +210,12 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
 
         const mediaId = 'media-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
         let detectedFaces: FaceTag[] = [];
+        let faceScanComplete = false;
         if (type === 'photo') {
           updateFile(i, { status: 'detecting' });
           try {
             detectedFaces = await detectFacesInPhoto(dataUrl, mediaId);
+            faceScanComplete = true;
           } catch {
             // Face detection is optional; keep the uploaded photo if it fails.
           }
@@ -225,7 +229,8 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
           dataUrl,
           mimeType: file.type,
           size: file.size,
-          faces: detectedFaces
+          faces: detectedFaces,
+          faceScanComplete
         };
 
         updateFile(i, { status: 'saving' });
@@ -926,10 +931,14 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
           isOpen={isFaceRecognitionModalOpen}
           onClose={() => setIsFaceRecognitionModalOpen(false)}
           persons={persons}
-          onUpdatePersons={(updated) => {
-            if (onUpdatePersons) onUpdatePersons(updated);
+          mediaArchive={allMedia}
+          onUpdateData={async (updatedPersons, updatedArchive) => {
+            if (onUpdateFaceRecognitionData) {
+              await onUpdateFaceRecognitionData(updatedPersons, updatedArchive);
+            } else if (onUpdatePersons) {
+              onUpdatePersons(updatedPersons);
+            }
           }}
-          onSelectPerson={onSelectPerson}
         />
       )}
     </div>
