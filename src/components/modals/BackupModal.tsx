@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { FamilyTreeData } from '../../types/genealogy';
-import { exportTreeAsJson, exportTreeAsGedcom, validateImportedData, saveFamilyTree, waitForPendingSaves } from '../../services/db';
+import { exportTreeAsJson, exportTreeAsGedcom, importTreeFromGedcom, validateImportedData, saveFamilyTree, waitForPendingSaves } from '../../services/db';
 import { isTauriDesktop, exportNativeBackup, inspectNativeBackup, restoreNativeBackup, type BackupSummary } from '../../services/nativeTreeRepository';
 import { save } from '@tauri-apps/plugin-dialog';
 import { X, Download, Upload, RefreshCw, Trash2, FileText, CheckCircle2, AlertTriangle } from 'lucide-react';
@@ -91,16 +91,19 @@ export const BackupModal: React.FC<BackupModalProps> = ({
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const raw = JSON.parse(event.target?.result as string);
-        const valid = validateImportedData(raw);
+        const fileContent = event.target?.result as string;
+        const isGedcom = /\.ged(?:com)?$/i.test(file.name);
+        const valid = isGedcom
+          ? importTreeFromGedcom(fileContent, file.name)
+          : validateImportedData(JSON.parse(fileContent));
         if (valid) {
           setPendingImport(valid);
           setStatusMessage(null);
         } else {
-          setStatusMessage({ text: 'Ошибка: файл не является корректным архивом родословной.', type: 'error' });
+          setStatusMessage({ text: isGedcom ? 'Не удалось найти персоналии в GEDCOM-файле. Проверьте формат файла.' : 'Ошибка: файл не является корректным архивом родословной.', type: 'error' });
         }
       } catch (err) {
-        setStatusMessage({ text: 'Не удалось прочитать файл. Убедитесь, что это корректный JSON.', type: 'error' });
+        setStatusMessage({ text: /\.ged(?:com)?$/i.test(file.name) ? 'Не удалось прочитать GEDCOM-файл.' : 'Не удалось прочитать файл. Убедитесь, что это корректный JSON.', type: 'error' });
       }
     };
     reader.onerror = () => {
@@ -207,13 +210,13 @@ export const BackupModal: React.FC<BackupModalProps> = ({
           {/* Import Option */}
           <div className="space-y-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-stone-700 block">
-              Восстановление из файла
+              Импорт и восстановление из файла
             </span>
 
             <input
               type="file"
               ref={fileInputRef}
-              accept={desktop ? '.zip,.json' : '.json'}
+              accept={desktop ? '.zip,.json,.ged,.gedcom' : '.json,.ged,.gedcom'}
               onChange={handleFileChange}
               className="hidden"
             />
@@ -223,7 +226,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
               className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-dashed border-stone-300 hover:border-stone-500 bg-white text-xs font-medium text-stone-700 transition"
             >
               <Upload className="w-4 h-4 text-stone-500" />
-              <span>Загрузить резервную копию {desktop ? 'ZIP или JSON' : 'JSON'} с устройства</span>
+              <span>Загрузить GEDCOM или резервную копию {desktop ? 'ZIP / JSON' : 'JSON'} с устройства</span>
             </button>
 
             {pendingZip && (
@@ -245,7 +248,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
                 <div>
                   <h4 className="text-xs font-bold text-amber-950">Заменить текущий архив проверенной копией?</h4>
                   <p className="text-xs text-amber-800 mt-0.5">
-                    Будет импортировано: {pendingImport.persons.length} персон, {pendingImport.relationships.length} связей и {pendingImport.mediaArchive?.length || 0} файлов.
+                    Будет импортировано: {pendingImport.persons.length} персон, {pendingImport.relationships.length} связей и {pendingImport.mediaArchive?.length || 0} файлов. Медиа из GEDCOM не включаются в стандартный формат.
                   </p>
                 </div>
                 <div className="flex justify-end gap-2">

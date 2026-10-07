@@ -458,6 +458,86 @@ export function exportTreeAsGedcom(data: FamilyTreeData): void {
   URL.revokeObjectURL(url);
 }
 
+/** Parse GEDCOM 5.x individuals and family records into the application's tree model. */
+export function importTreeFromGedcom(content: string, fileName = ''): FamilyTreeData | null {
+  const records: Array<{ level: number; tag: string; value: string; children: Array<{ level: number; tag: string; value: string; children: Array<{ level: number; tag: string; value: string }> }> }> = [];
+  let current: (typeof records)[number] | null = null;
+  let event: (typeof records)[number]['children'][number] | null = null;
+
+  for (const rawLine of content.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const match = rawLine.match(/^\s*(\d+)\s+(?:(@[^@]+@)\s+)?([A-Za-z_]+)(?:\s+(.*))?$/);
+    if (!match) continue;
+    const level = Number(match[1]);
+    const tag = match[3].toUpperCase();
+    const value = (match[4] || '').trim();
+    if (level === 0) {
+      current = { level, tag: tag, value: match[2] || '', children: [] };
+      records.push(current);
+      event = null;
+    } else if (current && level === 1) {
+      const child = { level, tag, value, children: [] as Array<{ level: number; tag: string; value: string }> };
+      current.children.push(child);
+      event = ['BIRT', 'DEAT'].includes(tag) ? child : null;
+    } else if (current && level === 2) {
+      const parent = event && ['DATE', 'PLAC'].includes(tag) ? event : current.children[current.children.length - 1];
+      if (parent) parent.children.push({ level, tag, value });
+    }
+  }
+
+  const individuals = records.filter((record) => record.tag === 'INDI');
+  if (!individuals.length) return null;
+  const now = Date.now();
+  const idByXref = new Map<string, string>();
+  individuals.forEach((record, index) => idByXref.set(record.value, `gedcom-${index + 1}-${Math.random().toString(36).slice(2, 8)}`));
+  const parseDate = (value: string | undefined): string | undefined => {
+    if (!value) return undefined;
+    const normalized = value.trim().toUpperCase().replace(/^(ABT|ABOUT|BEF|BEFORE|AFT|AFTER|CAL|EST)\s+/, '');
+    const months: Record<string, string> = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06', JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
+    const parts = normalized.split(/\s+/);
+    if (/^\d{3,4}$/.test(parts[0])) return parts[0];
+    if (parts.length >= 3 && months[parts[1]] && /^\d{1,2}$/.test(parts[0]) && /^\d{3,4}$/.test(parts[2])) return `${parts[2]}-${months[parts[1]]}-${parts[0].padStart(2, '0')}`;
+    if (parts.length >= 2 && months[parts[0]] && /^\d{3,4}$/.test(parts[1])) return `${parts[1]}-${months[parts[0]]}`;
+    return value.trim();
+  };
+  const first = (record: (typeof records)[number], tag: string) => record.children.find((child) => child.tag === tag);
+  const childValue = (record: (typeof records)[number], tag: string, childTag: string) => first(record, tag)?.children.find((child) => child.tag === childTag)?.value;
+  const persons: Person[] = individuals.map((record, index) => {
+    const name = first(record, 'NAME')?.value || '';
+    const surname = name.match(/\/([^/]*)\//)?.[1]?.trim() || '';
+    const given = name.replace(/\/[^/]*\//g, ' ').trim().split(/\s+/).filter(Boolean);
+    const birthDate = parseDate(childValue(record, 'BIRT', 'DATE'));
+    const deathDate = parseDate(childValue(record, 'DEAT', 'DATE'));
+    const sex = first(record, 'SEX')?.value.toUpperCase();
+    const individualNotes = record.children.filter((child) => child.tag === 'NOTE').map((child) => child.value + child.children.map((part) => `${part.tag === 'CONT' ? '\n' : ''}${part.value}`).join('')).join('\n');
+    const id = idByXref.get(record.value)!;
+    return {
+      id, firstName: given.shift() || 'Неизвестно', lastName: surname, ...(given.length ? { patronymic: given.join(' ') } : {}),
+      gender: sex === 'M' ? 'male' : sex === 'F' ? 'female' : 'other',
+      ...(first(record, 'NAME')?.children.find((child) => child.tag === '_MARNM') ? { maidenName: first(record, 'NAME')!.children.find((child) => child.tag === '_MARNM')!.value } : {}),
+      ...(birthDate ? { birthDate } : {}), ...(childValue(record, 'BIRT', 'PLAC') ? { birthPlace: childValue(record, 'BIRT', 'PLAC') } : {}),
+      isDeceased: !!first(record, 'DEAT') || !!deathDate, ...(deathDate ? { deathDate } : {}), ...(childValue(record, 'DEAT', 'PLAC') ? { deathPlace: childValue(record, 'DEAT', 'PLAC') } : {}),
+      ...(first(record, 'OCCU') ? { occupation: first(record, 'OCCU')!.value } : {}),
+      bio: individualNotes, significantDates: [], mediaFiles: [], tags: [], createdAt: now + index, updatedAt: now + index,
+    };
+  });
+  const relationships: RelationshipRecord[] = [];
+  const addRelationship = (a: string | undefined, b: string | undefined, type: RelationshipRecord['type'], suffix: string) => {
+    if (!a || !b || a === b || relationships.some((rel) => rel.type === type && rel.person1Id === a && rel.person2Id === b)) return;
+    relationships.push({ id: `gedcom-rel-${relationships.length + 1}-${suffix}`, person1Id: a, person2Id: b, type });
+  };
+  records.filter((record) => record.tag === 'FAM').forEach((family, familyIndex) => {
+    const husband = idByXref.get(first(family, 'HUSB')?.value || '');
+    const wife = idByXref.get(first(family, 'WIFE')?.value || '');
+    addRelationship(husband, wife, 'marriage', String(familyIndex));
+    family.children.filter((child) => child.tag === 'CHIL').forEach((child) => {
+      const personId = idByXref.get(child.value);
+      addRelationship(husband, personId, 'parent', String(familyIndex));
+      addRelationship(wife, personId, 'parent', String(familyIndex));
+    });
+  });
+  return { persons, relationships, mediaArchive: [], treeName: fileName.replace(/\.ged(?:com)?$/i, '') || 'Импорт GEDCOM', description: '', lastModified: now, version: 1 };
+}
+
 /**
  * Validate imported JSON data
  */

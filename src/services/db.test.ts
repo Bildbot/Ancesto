@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { normalizeTreeData, saveFamilyTree, validateImportedData } from './db';
+import { importTreeFromGedcom, normalizeTreeData, saveFamilyTree, validateImportedData } from './db';
 import type { FamilyTreeData, Person } from '../types/genealogy';
 import { INITIAL_DEMO_DATA } from '../data/demoFamily';
 
@@ -41,6 +41,40 @@ afterEach(() => {
 });
 
 describe('BackupService contract', () => {
+  it('imports GEDCOM people, dates, notes and family relationships', () => {
+    const imported = importTreeFromGedcom([
+      '0 HEAD',
+      '1 CHAR UTF-8',
+      '0 @I1@ INDI',
+      '1 NAME Иван /Иванов/',
+      '1 SEX M',
+      '1 BIRT',
+      '2 DATE 12 MAR 1900',
+      '2 PLAC Москва',
+      '1 NOTE Первая строка',
+      '2 CONT Вторая строка',
+      '0 @I2@ INDI',
+      '1 NAME Анна /Петрова/',
+      '1 SEX F',
+      '0 @I3@ INDI',
+      '1 NAME Пётр /Иванов/',
+      '0 @F1@ FAM',
+      '1 HUSB @I1@',
+      '1 WIFE @I2@',
+      '1 CHIL @I3@',
+      '0 TRLR',
+    ].join('\n'), 'family.ged');
+
+    expect(imported?.persons).toHaveLength(3);
+    expect(imported?.persons[0]).toMatchObject({ firstName: 'Иван', lastName: 'Иванов', birthDate: '1900-03-12', birthPlace: 'Москва', bio: 'Первая строка\nВторая строка' });
+    expect(imported?.relationships.map(({ type }) => type)).toEqual(['marriage', 'parent', 'parent']);
+    expect(imported?.treeName).toBe('family');
+  });
+
+  it('returns null for GEDCOM without individual records', () => {
+    expect(importTreeFromGedcom('0 HEAD\n1 SOUR Unknown\n0 TRLR')).toBeNull();
+  });
+
   it('normalizes legacy spouse records into one marriage and preserves an unknown end as ended', () => {
     const normalized = normalizeTreeData({
       ...treeData,
