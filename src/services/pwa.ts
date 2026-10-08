@@ -9,8 +9,9 @@ export async function initializePwa(): Promise<void> {
       const registrations = await navigator.serviceWorker.getRegistrations();
       const expectedScriptPath = new URL(serviceWorkerUrl, window.location.href).pathname;
       await Promise.all(registrations
-        .filter((registration) => [registration.active, registration.waiting, registration.installing]
-          .some((worker) => worker && new URL(worker.scriptURL).pathname === expectedScriptPath))
+        .filter((registration) => registration.scope === new URL(BASE_URL, window.location.href).toString()
+          && [registration.active, registration.waiting, registration.installing]
+            .some((worker) => worker && new URL(worker.scriptURL).pathname === expectedScriptPath))
         .map((registration) => registration.unregister()));
     }
     return;
@@ -20,7 +21,6 @@ export async function initializePwa(): Promise<void> {
   manifest.href = `${BASE_URL}manifest.json`;
   document.head.appendChild(manifest);
   if ('serviceWorker' in navigator) {
-    const registration = await navigator.serviceWorker.register(serviceWorkerUrl, { scope: BASE_URL });
-    await registration.update();
+    await navigator.serviceWorker.register(serviceWorkerUrl, { scope: BASE_URL });
   }
 }
