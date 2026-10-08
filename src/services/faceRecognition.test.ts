@@ -91,6 +91,32 @@ describe('MediaAttachmentService contract', () => {
 
     expect(result[1].mediaFiles).toHaveLength(1);
     expect(result[1].mediaFiles[0].faces?.[0].personId).toBe('person-a');
+    expect(result[1].mediaFiles[0].manualPersonIds).toContain('person-b');
+  });
+
+  it('detaches only the requested manual link and preserves remaining people and face tags', () => {
+    const taggedPhoto: MediaItem = {
+      ...sharedDocument,
+      type: 'photo',
+      manualPersonIds: ['person-b', 'person-c'],
+      faces: [{
+        id: 'face-1', mediaId: 'media-1',
+        box: { x: 10, y: 10, width: 20, height: 20 },
+        personId: 'person-a', isConfirmed: true,
+      }],
+    };
+    const result = detachMediaFromPerson([
+      person('person-a', [taggedPhoto]),
+      person('person-b', [taggedPhoto]),
+      person('person-c', [taggedPhoto]),
+    ], 'person-b', 'media-1');
+
+    expect(result[1].mediaFiles).toEqual([]);
+    expect(result[0].mediaFiles[0]).toMatchObject({
+      manualPersonIds: ['person-c'],
+      faces: [{ personId: 'person-a', isConfirmed: true }],
+    });
+    expect(result[2].mediaFiles[0].manualPersonIds).toContain('person-c');
   });
 
   it('clusters similar unknown faces while keeping different people in separate clusters', () => {

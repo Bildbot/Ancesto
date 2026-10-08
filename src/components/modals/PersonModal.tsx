@@ -342,8 +342,9 @@ export const PersonModal: React.FC<PersonModalProps> = ({
       .map((t) => t.trim())
       .filter(Boolean);
 
+    const savedPersonId = person?.id || 'p-' + Date.now();
     const savedPerson: Person = {
-      id: person?.id || 'p-' + Date.now(),
+      id: savedPersonId,
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       patronymic: patronymic.trim() || undefined,
@@ -360,7 +361,10 @@ export const PersonModal: React.FC<PersonModalProps> = ({
       bio,
       tags,
       significantDates: significantDates.map(sd => ({ ...sd, date: formatDisplayDate(sd.date) })),
-      mediaFiles,
+      mediaFiles: mediaFiles.map((media) => ({
+        ...media,
+        manualPersonIds: Array.from(new Set([...(media.manualPersonIds || []), ...(mediaArchive.some((item) => item.id === media.id) || allPersons.some((candidate) => candidate.mediaFiles?.some((item) => item.id === media.id)) ? [savedPersonId] : [])])),
+      })),
       createdAt: person?.createdAt || Date.now(),
       updatedAt: Date.now()
     };
@@ -1741,7 +1745,10 @@ export const PersonModal: React.FC<PersonModalProps> = ({
               const nextList: MediaItem[] = [];
               selectedIds.forEach((id) => {
                 const item = pool.get(id);
-                if (item) nextList.push({ ...item });
+                if (item) nextList.push({
+                  ...item,
+                  manualPersonIds: Array.from(new Set([...(item.manualPersonIds || []), ...(person?.id ? [person.id] : [])])),
+                });
               });
               setMediaFiles(nextList);
             }}

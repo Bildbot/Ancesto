@@ -281,9 +281,6 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
     const targetPerson = persons.find((p) => p.id === personId);
     if (!targetPerson) return;
 
-    const alreadyAttached = targetPerson.mediaFiles?.some((m) => m.id === media.id);
-    if (alreadyAttached) return;
-
     onUpdatePersons(attachMediaToPerson(persons, personId, media));
     setShowAttachDropdownMediaId(null);
   };
@@ -827,20 +824,20 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
                     if (!onUpdatePersons) return;
                     setLightboxMedia((prev) => (prev ? { ...prev, faces: updatedFaces } : null));
 
-                    const updatedPersons = persons.map((p) => {
-                      if (!p.mediaFiles || !p.mediaFiles.some((m) => m.id === lightboxMedia.id)) return p;
-                      const updatedMedia = p.mediaFiles.map((m) => {
-                        if (m.id === lightboxMedia.id) {
-                          return { ...m, faces: updatedFaces };
-                        }
-                        return m;
-                      });
-                      return { ...p, mediaFiles: updatedMedia };
-                    });
-
+                    const updatedArchive = allMedia.map((media) => media.id === lightboxMedia.id
+                      ? { ...media, faces: updatedFaces }
+                      : media);
+                    const archiveMedia = updatedArchive.find((media) => media.id === lightboxMedia.id)!;
+                    const updatedPersons = persons.map((person) => ({
+                      ...person,
+                      mediaFiles: person.mediaFiles.map((media) => media.id === lightboxMedia.id ? archiveMedia : media),
+                    }));
+                    if (onUpdateFaceRecognitionData) {
+                      void onUpdateFaceRecognitionData(updatedPersons, updatedArchive);
+                      return;
+                    }
                     const { updatedPersons: matchedPersons } = updateFaceSuggestionsAcrossTree(updatedPersons);
-                    const finalPersons = syncTaggedMediaAcrossPersons(matchedPersons);
-                    onUpdatePersons(finalPersons);
+                    onUpdatePersons(syncTaggedMediaAcrossPersons(matchedPersons));
                   }}
                 />
               ) : lightboxMedia.type === 'video' ? (

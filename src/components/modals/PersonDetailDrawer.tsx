@@ -52,7 +52,7 @@ import {
   Unlink
 } from 'lucide-react';
 import { PhotoFaceViewer } from '../media/PhotoFaceViewer';
-import { detachMediaFromPerson, extractBestFaceAvatar } from '../../services/faceRecognition';
+import { attachMediaToPerson, detachMediaFromPerson, extractBestFaceAvatar } from '../../services/faceRecognition';
 import { AttachMediaModal } from './AttachMediaModal';
 
 /**
@@ -200,7 +200,10 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
     const nextFiles: MediaItem[] = [];
     selectedMediaIds.forEach((id) => {
       const item = poolMap.get(id);
-      if (item) nextFiles.push({ ...item });
+      if (item) nextFiles.push({
+        ...item,
+        manualPersonIds: Array.from(new Set([...(item.manualPersonIds || []), person.id])),
+      });
     });
 
     const updatedPerson: Person = {
@@ -210,7 +213,13 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
     };
 
     if (onUpdateAllPersons) {
-      const nextList = allPersons.map((p) => (p.id === person.id ? updatedPerson : p));
+      const nextList = selectedMediaIds.reduce(
+        (people, mediaId) => {
+          const item = poolMap.get(mediaId);
+          return item ? attachMediaToPerson(people, person.id, item) : people;
+        },
+        allPersons,
+      );
       onUpdateAllPersons(nextList);
     } else if (onUpdatePerson) {
       onUpdatePerson(updatedPerson);
