@@ -33,7 +33,7 @@ async function chooseAndConfirmImport(onImportData: (data: FamilyTreeData) => Pr
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
   await act(async () => {
-    host.querySelector('button') && Array.from(host.querySelectorAll('button')).find((button) => button.textContent?.includes('Заменить архив'))?.click();
+    Array.from(host.querySelectorAll('button')).find((button) => button.textContent?.includes('Заменить архив'))?.click();
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
 }

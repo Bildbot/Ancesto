@@ -282,10 +282,10 @@ mod tests {
             }
             let mut content = Vec::new();
             file.read_to_end(&mut content).unwrap();
-            if let Some((replace_name, replacement)) = replace {
-                if name == replace_name {
-                    content = replacement.to_vec();
-                }
+            if let Some((replace_name, replacement)) = replace
+                && name == replace_name
+            {
+                content = replacement.to_vec();
             }
             target
                 .start_file(name, SimpleFileOptions::default())

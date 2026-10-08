@@ -293,7 +293,7 @@ export function normalizeTreeData(data: FamilyTreeData): FamilyTreeData {
       normalizedRels[existingIndex] = {
         ...existing,
         startDate,
-        startDateUnknown: !!startDate ? false : true,
+        startDateUnknown: !startDate,
         endDate: preferIncomingEnd ? rel.endDate : existing.endDate,
         endDateUnknown: preferIncomingEnd
           ? (!rel.endDate && endDateUnknown === true)
@@ -731,7 +731,7 @@ export function validateImportedData(raw: unknown): FamilyTreeData | null {
 
   const validData: FamilyTreeData = {
     treeName: raw.treeName,
-    description: raw.description,
+    description: typeof raw.description === 'string' ? raw.description : undefined,
     persons: raw.persons as Person[],
     relationships: raw.relationships as RelationshipRecord[],
     mediaArchive: Array.isArray(raw.mediaArchive) ? raw.mediaArchive as MediaItem[] : [],
