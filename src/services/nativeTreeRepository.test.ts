@@ -26,13 +26,14 @@ describe('desktop backup bridge', () => {
 
   it('inspects without invoking a destructive restore', async () => {
     vi.mocked(invoke).mockResolvedValue({ persons: 2, relationships: 1, media: 3 });
-    expect(await inspectNativeBackup([1, 2])).toEqual({ persons: 2, relationships: 1, media: 3 });
+    expect(await inspectNativeBackup('C:\\backup.zip')).toEqual({ persons: 2, relationships: 1, media: 3 });
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith('inspect_backup', { bytes: [1, 2] });
+    expect(invoke).toHaveBeenCalledWith('inspect_backup', { source: 'C:\\backup.zip' });
   });
 
   it('returns the rollback location after a confirmed restore', async () => {
     vi.mocked(invoke).mockResolvedValue('C:\\backups\\before-restore.zip');
-    expect(await restoreNativeBackup([1, 2])).toBe('C:\\backups\\before-restore.zip');
+    expect(await restoreNativeBackup('C:\\backup.zip')).toBe('C:\\backups\\before-restore.zip');
+    expect(invoke).toHaveBeenCalledWith('restore_backup', { source: 'C:\\backup.zip' });
   });
 });

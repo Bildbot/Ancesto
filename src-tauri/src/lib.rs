@@ -52,19 +52,44 @@ fn export_backup(destination: String, state: State<'_, DatabasePath>) -> Result<
 }
 
 #[tauri::command]
-fn inspect_backup(bytes: Vec<u8>) -> Result<backup::Summary, String> {
+fn inspect_backup(source: String) -> Result<backup::Summary, String> {
+    let bytes = std::fs::read(source).map_err(|error| error.to_string())?;
     backup::inspect(&bytes)
 }
 
 #[tauri::command]
-fn restore_backup(bytes: Vec<u8>, state: State<'_, DatabasePath>) -> Result<String, String> {
+fn restore_backup(source: String, state: State<'_, DatabasePath>) -> Result<String, String> {
     let _guard = state.1.lock().map_err(|error| error.to_string())?;
+    let bytes = std::fs::read(source).map_err(|error| error.to_string())?;
     backup::restore(&state.0, &bytes).map(|path| path.to_string_lossy().into_owned())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("app-media", |context, request, responder| {
+            let file_name = request.uri().host().unwrap_or_default().to_string();
+            let state = context.app_handle().state::<DatabasePath>();
+            let result = state
+                .1
+                .lock()
+                .map_err(|error| error.to_string())
+                .and_then(|_guard| database::read_media(&state.0, &file_name));
+            let response = match result {
+                Ok((mime, bytes)) => tauri::http::Response::builder()
+                    .header("Content-Type", mime)
+                    .header("Cache-Control", "no-store")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(bytes)
+                    .unwrap(),
+                Err(error) => tauri::http::Response::builder()
+                    .status(404)
+                    .header("Content-Type", "text/plain; charset=utf-8")
+                    .body(error.into_bytes())
+                    .unwrap(),
+            };
+            responder.respond(response);
+        })
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;

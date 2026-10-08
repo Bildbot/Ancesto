@@ -27,10 +27,10 @@ export function exportNativeBackup(destination: string): Promise<void> {
   return invoke('export_backup', { destination });
 }
 
-export function inspectNativeBackup(bytes: number[]): Promise<BackupSummary> {
-  return invoke('inspect_backup', { bytes });
+export function inspectNativeBackup(source: string): Promise<BackupSummary> {
+  return invoke('inspect_backup', { source });
 }
 
-export function restoreNativeBackup(bytes: number[]): Promise<string> {
-  return invoke('restore_backup', { bytes });
+export function restoreNativeBackup(source: string): Promise<string> {
+  return invoke('restore_backup', { source });
 }

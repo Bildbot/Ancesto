@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { FamilyTreeData } from '../../types/genealogy';
 import { exportTreeAsJson, exportTreeAsGedcom, importTreeFromGedcom, validateImportedData, saveFamilyTree, waitForPendingSaves } from '../../services/db';
 import { isTauriDesktop, exportNativeBackup, inspectNativeBackup, restoreNativeBackup, type BackupSummary } from '../../services/nativeTreeRepository';
-import { save } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { X, Download, Upload, RefreshCw, Trash2, FileText, CheckCircle2, AlertTriangle } from 'lucide-react';
 
 const MAX_BACKUP_FILE_SIZE = 100 * 1024 * 1024;
@@ -28,7 +28,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
   const [confirmAction, setConfirmAction] = useState<'resetDemo' | 'clearTree' | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [pendingImport, setPendingImport] = useState<FamilyTreeData | null>(null);
-  const [pendingZip, setPendingZip] = useState<{ bytes: number[]; summary: BackupSummary } | null>(null);
+  const [pendingZip, setPendingZip] = useState<{ source: string; summary: BackupSummary } | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const desktop = isTauriDesktop();
 
@@ -57,7 +57,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
     setIsBusy(true);
     try {
       await waitForPendingSaves();
-      const rollbackPath = await restoreNativeBackup(pendingZip.bytes);
+      const rollbackPath = await restoreNativeBackup(pendingZip.source);
       setPendingZip(null);
       setStatusMessage({ text: `Архив восстановлен. Предыдущая копия: ${rollbackPath}`, type: 'success' });
       window.location.reload();
@@ -78,13 +78,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
     }
 
     if (desktop && file.name.toLowerCase().endsWith('.zip')) {
-      setIsBusy(true);
-      try {
-        const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-        const summary = await inspectNativeBackup(bytes);
-        setPendingZip({ bytes, summary });
-      } catch (error) { showError(error); }
-      finally { setIsBusy(false); }
+      setStatusMessage({ text: 'ZIP-копии открываются через системный диалог ниже.', type: 'error' });
       return;
     }
 
@@ -110,6 +104,20 @@ export const BackupModal: React.FC<BackupModalProps> = ({
       setStatusMessage({ text: 'Не удалось прочитать файл. Попробуйте выбрать резервную копию ещё раз.', type: 'error' });
     };
     reader.readAsText(file);
+  };
+
+  const handleSelectNativeBackup = async () => {
+    setIsBusy(true);
+    setPendingImport(null);
+    setPendingZip(null);
+    setStatusMessage(null);
+    try {
+      const source = await open({ multiple: false, filters: [{ name: 'Резервная копия Genedek', extensions: ['zip'] }] });
+      if (typeof source !== 'string') return;
+      const summary = await inspectNativeBackup(source);
+      setPendingZip({ source, summary });
+    } catch (error) { showError(error); }
+    finally { setIsBusy(false); }
   };
 
   const totalMediaCount = treeData.persons.reduce(
@@ -216,7 +224,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
             <input
               type="file"
               ref={fileInputRef}
-              accept={desktop ? '.zip,.json,.ged,.gedcom' : '.json,.ged,.gedcom'}
+              accept=".json,.ged,.gedcom"
               onChange={handleFileChange}
               className="hidden"
             />
@@ -226,8 +234,18 @@ export const BackupModal: React.FC<BackupModalProps> = ({
               className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-dashed border-stone-300 hover:border-stone-500 bg-white text-xs font-medium text-stone-700 transition"
             >
               <Upload className="w-4 h-4 text-stone-500" />
-              <span>Загрузить GEDCOM или резервную копию {desktop ? 'ZIP / JSON' : 'JSON'} с устройства</span>
+              <span>Загрузить GEDCOM или JSON-копию с устройства</span>
             </button>
+
+            {desktop && (
+              <button
+                onClick={() => void handleSelectNativeBackup()}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-dashed border-stone-300 hover:border-stone-500 bg-white text-xs font-medium text-stone-700 transition"
+              >
+                <Upload className="w-4 h-4 text-stone-500" />
+                <span>Проверить ZIP-копию через системный диалог</span>
+              </button>
+            )}
 
             {pendingZip && (
               <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-stone-800 space-y-2.5">

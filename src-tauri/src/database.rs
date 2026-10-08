@@ -77,11 +77,48 @@ pub fn load_snapshot(connection: &Connection) -> Result<Option<Value>, String> {
 
 pub fn load_tree(path: &Path) -> Result<Option<Value>, String> {
     let connection = open(path)?;
-    let Some(mut tree) = load_normalized_tree(&connection)? else {
-        return Ok(None);
-    };
-    hydrate_media(&mut tree, &media_directory(path))?;
-    Ok(Some(tree))
+    load_normalized_tree(&connection)
+}
+
+pub fn read_media(path: &Path, file_name: &str) -> Result<(String, Vec<u8>), String> {
+    if Path::new(file_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some(file_name)
+        || file_name.is_empty()
+    {
+        return Err("Недопустимый путь медиафайла.".to_string());
+    }
+    let connection = open(path)?;
+    let payload: String = connection
+        .query_row(
+            "SELECT payload FROM media WHERE json_extract(payload, '$.dataUrl') = ?1",
+            [format!("app-media://{file_name}")],
+            |row| row.get(0),
+        )
+        .map_err(|_| format!("Медиафайл {file_name} отсутствует в архиве."))?;
+    let media: Value = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+    let bytes = std::fs::read(media_directory(path).join(file_name))
+        .map_err(|error| format!("Не удалось прочитать медиафайл {file_name}: {error}"))?;
+    if media
+        .get("sha256")
+        .and_then(Value::as_str)
+        .is_some_and(|expected| expected != sha256_hex(&bytes))
+        || media
+            .get("fileSize")
+            .and_then(Value::as_u64)
+            .is_some_and(|expected| expected != bytes.len() as u64)
+    {
+        return Err(format!(
+            "Медиафайл {file_name} повреждён: контрольная сумма или размер не совпадают."
+        ));
+    }
+    let mime = media
+        .get("mimeType")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    Ok((mime, bytes))
 }
 
 pub fn save_tree(path: &Path, tree: &Value) -> Result<(), String> {
@@ -502,54 +539,6 @@ fn externalize_media(tree: &mut Value, media_dir: &Path) -> Result<(), String> {
     })
 }
 
-fn hydrate_media(tree: &mut Value, media_dir: &Path) -> Result<(), String> {
-    visit_media(tree, &mut |media| {
-        let Some(reference) = media.get("dataUrl").and_then(Value::as_str) else {
-            return Ok(());
-        };
-        let Some(file_name) = reference.strip_prefix("app-media://") else {
-            return Ok(());
-        };
-        if Path::new(file_name)
-            .file_name()
-            .and_then(|name| name.to_str())
-            != Some(file_name)
-        {
-            return Err("Invalid media file reference.".to_string());
-        }
-        let bytes = std::fs::read(media_dir.join(file_name))
-            .map_err(|error| format!("Не удалось прочитать медиафайл {file_name}: {error}"))?;
-        let checksum = sha256_hex(&bytes);
-        if media
-            .get("sha256")
-            .and_then(Value::as_str)
-            .is_some_and(|expected| expected != checksum)
-            || media
-                .get("fileSize")
-                .and_then(Value::as_u64)
-                .is_some_and(|expected| expected != bytes.len() as u64)
-        {
-            return Err(format!(
-                "Медиафайл {file_name} повреждён: контрольная сумма или размер не совпадают."
-            ));
-        }
-        let mime_type = media
-            .get("mimeType")
-            .and_then(Value::as_str)
-            .unwrap_or("application/octet-stream");
-        media["dataUrl"] = Value::String(format!(
-            "data:{mime_type};base64,{}",
-            STANDARD.encode(bytes)
-        ));
-        // Internal file metadata stays in SQLite, not the UI/export contract.
-        if let Some(object) = media.as_object_mut() {
-            object.remove("sha256");
-            object.remove("fileSize");
-        }
-        Ok(())
-    })
-}
-
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -637,7 +626,13 @@ mod tests {
             std::fs::read_dir(directory.join("media")).unwrap().count(),
             1
         );
-        assert_eq!(load_tree(&path).unwrap(), Some(tree.clone()));
+        let loaded = load_tree(&path).unwrap().unwrap();
+        assert!(
+            loaded["mediaArchive"][0]["dataUrl"]
+                .as_str()
+                .unwrap()
+                .starts_with("app-media://")
+        );
         tree["mediaArchive"] = json!([]);
         save_tree(&path, &tree).unwrap();
         assert_eq!(
@@ -665,8 +660,14 @@ mod tests {
             .unwrap()
             .path();
         std::fs::remove_file(file).unwrap();
+        let loaded = load_tree(&path).unwrap().unwrap();
+        let file_name = loaded["mediaArchive"][0]["dataUrl"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("app-media://")
+            .unwrap();
         assert!(
-            load_tree(&path)
+            read_media(&path, file_name)
                 .unwrap_err()
                 .contains("Не удалось прочитать медиафайл")
         );
@@ -703,7 +704,7 @@ mod tests {
             loaded["mediaArchive"][0]["dataUrl"]
                 .as_str()
                 .unwrap()
-                .starts_with("data:video/mp4;base64,")
+                .starts_with("app-media://")
         );
 
         std::fs::remove_dir_all(directory).unwrap();
@@ -733,7 +734,17 @@ mod tests {
         let file = directory.join("media").join(name);
         assert!(file.exists());
         std::fs::write(&file, b"Y").unwrap();
-        assert!(load_tree(&path).unwrap_err().contains("повреждён"));
+        let loaded = load_tree(&path).unwrap().unwrap();
+        let file_name = loaded["mediaArchive"][0]["dataUrl"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("app-media://")
+            .unwrap();
+        assert!(
+            read_media(&path, file_name)
+                .unwrap_err()
+                .contains("повреждён")
+        );
         std::fs::write(&file, b"X").unwrap();
 
         let mut invalid = tree.clone();
@@ -741,7 +752,7 @@ mod tests {
             json!([{"id":"bad","person1Id":"missing","person2Id":"missing","type":"parent"}]);
         assert!(save_tree(&path, &invalid).is_err());
         assert!(file.exists());
-        assert_eq!(load_tree(&path).unwrap(), Some(tree.clone()));
+        assert!(load_tree(&path).unwrap().is_some());
 
         let mut empty = tree;
         empty["mediaArchive"] = json!([]);
@@ -849,13 +860,20 @@ mod tests {
             }]
         });
         save_snapshot(&mut connection, &tree).unwrap();
-        let violations: i64 = connection.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| row.get(0)).unwrap();
+        let violations: i64 = connection
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
         assert_eq!(violations, 0);
-        assert_eq!(load_normalized_tree(&connection).unwrap().unwrap()["persons"][0]["id"], "kept");
+        assert_eq!(
+            load_normalized_tree(&connection).unwrap().unwrap()["persons"][0]["id"],
+            "kept"
+        );
     }
 
     #[test]
-    fn externalizes_media_and_hydrates_it_on_load() {
+    fn externalizes_media_and_returns_a_lazy_url_on_load() {
         let directory =
             std::env::temp_dir().join(format!("genedek-sqlite-test-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -890,9 +908,61 @@ mod tests {
                 .unwrap()
                 .starts_with("app-media://")
         );
-        assert_eq!(load_tree(&database_path).unwrap(), Some(tree));
+        let loaded = load_tree(&database_path).unwrap().unwrap();
+        assert!(
+            loaded["persons"][0]["mediaFiles"][0]["dataUrl"]
+                .as_str()
+                .unwrap()
+                .starts_with("app-media://")
+        );
+        assert!(
+            loaded["mediaArchive"][0]["dataUrl"]
+                .as_str()
+                .unwrap()
+                .starts_with("app-media://")
+        );
         drop(connection);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn startup_payload_stays_small_for_many_large_photos_and_bytes_are_requested_lazily() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("archive.sqlite3");
+        let mut archive = Vec::new();
+        for index in 0..64 {
+            archive.push(json!({
+                "id": format!("photo-{index}"), "type":"photo", "name":format!("photo-{index}.png"),
+                "mimeType":"image/png", "dataUrl":format!("data:image/png;base64,{}", STANDARD.encode(vec![index as u8; 128 * 1024]))
+            }));
+        }
+        save_tree(
+            &path,
+            &json!({"treeName":"Large", "version":1, "lastModified":1,
+            "persons":[], "relationships":[], "mediaArchive":archive}),
+        )
+        .unwrap();
+
+        let startup_started = std::time::Instant::now();
+        let loaded = load_tree(&path).unwrap().unwrap();
+        let startup_elapsed = startup_started.elapsed();
+        let startup_payload = serde_json::to_string(&loaded).unwrap();
+        eprintln!(
+            "lazy-media benchmark: files=64, source-bytes={}, startup-payload-bytes={}, startup-load-ms={}",
+            64 * 128 * 1024,
+            startup_payload.len(),
+            startup_elapsed.as_millis()
+        );
+        assert!(startup_payload.len() < 64 * 1024);
+        assert!(!startup_payload.contains("base64,"));
+        assert_eq!(loaded["mediaArchive"].as_array().unwrap().len(), 64);
+        let file_name = loaded["mediaArchive"][0]["dataUrl"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("app-media://")
+            .unwrap();
+        let (_, bytes) = read_media(&path, file_name).unwrap();
+        assert_eq!(bytes.len(), 128 * 1024);
     }
 
     #[test]
@@ -927,7 +997,7 @@ mod tests {
         connection.execute("DELETE FROM tree_snapshot", []).unwrap();
         drop(connection);
 
-        assert_eq!(load_tree(&database_path).unwrap(), Some(tree));
+        assert!(load_tree(&database_path).unwrap().is_some());
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

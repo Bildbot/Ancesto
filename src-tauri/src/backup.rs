@@ -38,8 +38,8 @@ fn hash(bytes: &[u8]) -> String {
 }
 
 pub fn create(path: &Path) -> Result<Vec<u8>, String> {
-    // Read verifies every referenced media file before exporting.
-    database::load_tree(path)?.ok_or("Архив ещё не сохранён.")?;
+    let tree = database::load_tree(path)?.ok_or("Архив ещё не сохранён.")?;
+    verify_tree_media(path, &tree)?;
     let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
     let snapshot_path = temporary.path().join("archive.sqlite3");
     let connection = database::open(path)?;
@@ -210,7 +210,26 @@ fn inspect_tree(bytes: &[u8]) -> Result<(tempfile::TempDir, Value), String> {
     }
     drop(connection);
     let tree = database::load_tree(&path)?.ok_or("База не содержит дерева.")?;
+    verify_tree_media(&path, &tree)?;
     Ok((staging, tree))
+}
+
+fn verify_tree_media(path: &Path, tree: &Value) -> Result<(), String> {
+    for media in tree
+        .get("mediaArchive")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(file_name) = media
+            .get("dataUrl")
+            .and_then(Value::as_str)
+            .and_then(|url| url.strip_prefix("app-media://"))
+        {
+            database::read_media(path, file_name)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn inspect(bytes: &[u8]) -> Result<Summary, String> {
@@ -309,7 +328,10 @@ mod tests {
                 .unwrap_err()
                 .contains("Неподдерживаемый формат")
         );
-        assert_eq!(database::load_tree(&path).unwrap(), Some(tree));
+        assert_eq!(
+            database::load_tree(&path).unwrap().unwrap()["treeName"],
+            tree["treeName"]
+        );
         assert!(!source.path().join("backups").exists());
     }
 
@@ -332,7 +354,14 @@ mod tests {
             Some(old.clone())
         );
         let rollback = restore(&target_path, &bytes).unwrap();
-        assert_eq!(database::load_tree(&target_path).unwrap(), Some(tree));
+        let restored = database::load_tree(&target_path).unwrap().unwrap();
+        assert_eq!(restored["treeName"], tree["treeName"]);
+        assert!(
+            restored["mediaArchive"][0]["dataUrl"]
+                .as_str()
+                .unwrap()
+                .starts_with("app-media://")
+        );
         let rollback_bytes = std::fs::read(rollback).unwrap();
         assert_eq!(inspect_tree(&rollback_bytes).unwrap().1["treeName"], "Old");
     }
