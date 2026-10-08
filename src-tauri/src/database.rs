@@ -13,9 +13,24 @@ pub fn open(path: &Path) -> Result<Connection, String> {
 
 pub fn migrate(connection: &Connection) -> Result<(), String> {
     connection
-        .execute_batch(
-            "
-            PRAGMA foreign_keys = ON;
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|error| error.to_string())?;
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if version > 3 {
+        return Err(format!(
+            "Database schema version {version} is newer than supported version 3."
+        ));
+    }
+    if version == 3 {
+        return Ok(());
+    }
+    connection
+        .execute_batch("BEGIN IMMEDIATE;")
+        .map_err(|error| error.to_string())?;
+    let migration = connection.execute_batch(
+        "
             CREATE TABLE IF NOT EXISTS tree_snapshot (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 payload TEXT NOT NULL,
@@ -28,6 +43,7 @@ pub fn migrate(connection: &Connection) -> Result<(), String> {
                 version INTEGER NOT NULL,
                 last_modified INTEGER NOT NULL
             );
+            PRAGMA user_version = 1;
             CREATE TABLE IF NOT EXISTS persons (
                 id TEXT PRIMARY KEY,
                 payload TEXT NOT NULL
@@ -39,6 +55,7 @@ pub fn migrate(connection: &Connection) -> Result<(), String> {
                 relationship_type TEXT NOT NULL,
                 payload TEXT NOT NULL
             );
+            PRAGMA user_version = 2;
             CREATE TABLE IF NOT EXISTS media (
                 id TEXT PRIMARY KEY,
                 payload TEXT NOT NULL
@@ -55,9 +72,14 @@ pub fn migrate(connection: &Connection) -> Result<(), String> {
                 payload TEXT NOT NULL
             );
             PRAGMA user_version = 3;
+            COMMIT;
             ",
-        )
-        .map_err(|error| error.to_string())
+    );
+    if let Err(error) = migration {
+        let _ = connection.execute_batch("ROLLBACK;");
+        return Err(error.to_string());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -327,25 +349,13 @@ fn project_tree(transaction: &rusqlite::Transaction<'_>, tree: &Value) -> Result
         .and_then(Value::as_array)
         .ok_or_else(|| "Tree data must include relationships.".to_string())?;
 
-    transaction
-        .execute_batch(
-            "
-            DELETE FROM face_tags;
-            DELETE FROM media_attachments;
-            DELETE FROM relationships;
-            DELETE FROM media;
-            DELETE FROM persons;
-            ",
-        )
-        .map_err(|error| error.to_string())?;
-
     let mut person_ids = HashSet::new();
     for person in persons {
         let id = required_string(person, "id", "person")?;
         person_ids.insert(id.to_string());
         transaction
             .execute(
-                "INSERT INTO persons (id, payload) VALUES (?1, ?2)",
+                "INSERT INTO persons (id, payload) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
                 params![id, serialize(person)?],
             )
             .map_err(|error| error.to_string())?;
@@ -386,12 +396,135 @@ fn project_tree(transaction: &rusqlite::Transaction<'_>, tree: &Value) -> Result
         let relationship_type = required_string(relationship, "type", "relationship")?;
         transaction
             .execute(
-                "INSERT INTO relationships (id, person1_id, person2_id, relationship_type, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO relationships (id, person1_id, person2_id, relationship_type, payload) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(id) DO UPDATE SET person1_id = excluded.person1_id, person2_id = excluded.person2_id, relationship_type = excluded.relationship_type, payload = excluded.payload",
                 params![id, person1_id, person2_id, relationship_type, serialize(relationship)?],
             )
             .map_err(|error| error.to_string())?;
     }
 
+    // Prune only removed entities and their dependent rows; retained records are updated in place.
+    let relationship_ids: HashSet<String> = relationships
+        .iter()
+        .filter_map(|value| value.get("id").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+    let mut retained_media = HashSet::new();
+    let mut face_ids = HashSet::new();
+    let mut attachment_pairs = HashSet::new();
+    for person in persons {
+        for media in person
+            .get("mediaFiles")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(id) = media.get("id").and_then(Value::as_str) {
+                retained_media.insert(id.to_owned());
+                attachment_pairs.insert((
+                    required_string(person, "id", "person")?.to_owned(),
+                    id.to_owned(),
+                ));
+            }
+        }
+    }
+    for media in tree
+        .get("mediaArchive")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .chain(persons.iter().flat_map(|person| {
+            person
+                .get("mediaFiles")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        }))
+    {
+        if let Some(id) = media.get("id").and_then(Value::as_str) {
+            retained_media.insert(id.to_owned());
+            for person_id in media
+                .get("manualPersonIds")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                attachment_pairs.insert((person_id.to_owned(), id.to_owned()));
+            }
+        }
+        for face in media
+            .get("faces")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(id) = face.get("id").and_then(Value::as_str) {
+                face_ids.insert(id.to_owned());
+            }
+        }
+    }
+    prune_ids(transaction, "relationships", &relationship_ids)?;
+    prune_ids(transaction, "face_tags", &face_ids)?;
+    prune_attachments(transaction, &attachment_pairs)?;
+    prune_ids(transaction, "persons", &person_ids)?;
+    prune_ids(transaction, "media", &retained_media)?;
+
+    Ok(())
+}
+
+fn prune_ids(
+    transaction: &rusqlite::Transaction<'_>,
+    table: &str,
+    retained: &HashSet<String>,
+) -> Result<(), String> {
+    let id_column = match table {
+        "relationships" | "face_tags" | "persons" | "media" => "id",
+        "media_attachments" => return Ok(()),
+        _ => return Err("Unsupported entity table.".to_string()),
+    };
+    let query = format!("SELECT {id_column} FROM {table}");
+    let mut statement = transaction
+        .prepare(&query)
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    let existing: Vec<String> = rows
+        .collect::<Result<_, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+    let delete = format!("DELETE FROM {table} WHERE {id_column} = ?1");
+    for id in existing.into_iter().filter(|id| !retained.contains(id)) {
+        transaction
+            .execute(&delete, [&id])
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn prune_attachments(
+    transaction: &rusqlite::Transaction<'_>,
+    retained: &HashSet<(String, String)>,
+) -> Result<(), String> {
+    let mut statement = transaction
+        .prepare("SELECT person_id, media_id FROM media_attachments")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
+    let existing: Vec<(String, String)> = rows
+        .collect::<Result<_, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+    for (person_id, media_id) in existing.into_iter().filter(|pair| !retained.contains(pair)) {
+        transaction
+            .execute(
+                "DELETE FROM media_attachments WHERE person_id = ?1 AND media_id = ?2",
+                params![person_id, media_id],
+            )
+            .map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -405,7 +538,7 @@ fn insert_media(
     if media_ids.insert(media_id.clone()) {
         transaction
             .execute(
-                "INSERT INTO media (id, payload) VALUES (?1, ?2)",
+                "INSERT INTO media (id, payload) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
                 params![media_id, serialize(media)?],
             )
             .map_err(|error| error.to_string())?;
@@ -782,6 +915,71 @@ mod tests {
         save_snapshot(&mut connection, &tree).unwrap();
 
         assert_eq!(load_snapshot(&connection).unwrap(), Some(tree));
+    }
+
+    #[test]
+    fn migrations_are_transactional_versioned_and_preserve_existing_rows() {
+        let connection = Connection::open_in_memory().unwrap();
+        migrate(&connection).unwrap();
+        connection.execute("INSERT INTO tree_metadata (id, tree_name, version, last_modified) VALUES (1, 'Existing', 1, 1)", []).unwrap();
+        connection.pragma_update(None, "user_version", 2).unwrap();
+        migrate(&connection).unwrap();
+        let name: String = connection
+            .query_row(
+                "SELECT tree_name FROM tree_metadata WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "Existing");
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+
+        connection.pragma_update(None, "user_version", 99).unwrap();
+        assert!(
+            migrate(&connection)
+                .unwrap_err()
+                .contains("newer than supported")
+        );
+    }
+
+    #[test]
+    fn entity_updates_preserve_unchanged_records_and_prune_removed_ones() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate(&connection).unwrap();
+        let first = json!({"id":"first", "mediaFiles":[]});
+        let second = json!({"id":"second", "mediaFiles":[]});
+        save_snapshot(
+            &mut connection,
+            &json!({"treeName":"T", "version":1, "lastModified":1,
+            "persons":[first, second], "relationships":[], "mediaArchive":[]}),
+        )
+        .unwrap();
+        save_snapshot(&mut connection, &json!({"treeName":"T", "version":1, "lastModified":2,
+            "persons":[{"id":"first", "name":"updated", "mediaFiles":[]}], "relationships":[], "mediaArchive":[]})).unwrap();
+        let ids: Vec<String> = connection
+            .prepare("SELECT id FROM persons ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(ids, ["first"]);
+        let saved: Value = serde_json::from_str(
+            &connection
+                .query_row(
+                    "SELECT payload FROM persons WHERE id = 'first'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved["name"], "updated");
     }
 
     #[test]

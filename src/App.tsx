@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   FamilyTreeData, 
   Person, 
@@ -15,7 +15,8 @@ import { isTauriDesktop, saveNativeArchiveMedia } from './services/nativeTreeRep
 import { getParents, getSpouses } from './utils/kinship';
 import { removeRelationship } from './utils/relationships';
 import { syncTaggedMediaAcrossPersons } from './services/faceRecognition';
-import { deletePersonFromTree } from './domain/personDeletion';
+import { TreeApplicationService } from './domain/treeApplicationService';
+import { createTreeRepository } from './services/treeRepository';
 import { FamilyTreeView } from './components/views/FamilyTreeView';
 import { NetworkGraphView } from './components/views/NetworkGraphView';
 import { TimelineView } from './components/views/TimelineView';
@@ -40,6 +41,7 @@ import {
 } from 'lucide-react';
 
 export default function App() {
+  const treeService = useMemo(() => new TreeApplicationService(createTreeRepository()), []);
   const [treeData, setTreeData] = useState<FamilyTreeData>(EMPTY_TREE_DATA);
   const treeDataRef = useRef(treeData);
   treeDataRef.current = treeData;
@@ -221,9 +223,8 @@ export default function App() {
 
   // Delete person handler
   const handleDeletePerson = async (personId: string): Promise<boolean> => {
-    const nextData = deletePersonFromTree(treeDataRef.current, personId);
     try {
-      await saveFamilyTree(nextData);
+      const nextData = await treeService.deletePerson(treeDataRef.current, personId);
       treeDataRef.current = nextData;
       setTreeData(nextData);
       setSaveError(null);
@@ -288,10 +289,11 @@ export default function App() {
   }, []);
 
   const importTreeData = useCallback(async (newData: FamilyTreeData) => {
-    await saveFamilyTree(newData);
-    setTreeData(newData);
+    const imported = await treeService.importTree(newData);
+    treeDataRef.current = imported;
+    setTreeData(imported);
     setSaveError(null);
-  }, []);
+  }, [treeService]);
 
   const handleUpdateFaceRecognitionData = useCallback(async (updatedPersons: Person[], updatedArchive: MediaItem[]) => {
     const nextData: FamilyTreeData = {
