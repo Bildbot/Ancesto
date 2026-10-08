@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Person, RelationshipRecord, Gender, RelativeRole } from '../../types/genealogy';
-import { formatFullName, calculateAge, pluralizeYears, getParents, getChildren, getSpouses, getSiblings, formatDisplayDate, isFormerMarriage } from '../../utils/kinship';
+import { formatFullName, calculateAge, pluralizeYears, getParents, getChildren, getSpouses, getSiblings, formatDisplayDate, isFormerMarriage, getGenderPresentation } from '../../utils/kinship';
 import { 
   ZoomIn, 
   ZoomOut, 
@@ -1335,6 +1335,9 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
                         <span key={`${index}-${part}`} className="block break-words">{part}</span>
                       ))}
                     </h3>
+                    <span aria-label={getGenderPresentation(person.gender).label} title={getGenderPresentation(person.gender).label} className={`text-[10px] font-bold ${person.gender === 'female' ? 'text-rose-500' : person.gender === 'male' ? 'text-sky-600' : 'text-violet-600'}`}>
+                      {getGenderPresentation(person.gender).symbol}
+                    </span>
                     
                     {person.maidenName && (
                       <p className="text-[10px] text-stone-400 italic truncate">

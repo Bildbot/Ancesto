@@ -234,6 +234,52 @@ export interface DetailedSpouse {
   rel: RelationshipRecord;
 }
 
+export interface ParsedDate {
+  /** Start of the represented day/period, as a UTC timestamp. */
+  timestamp: number;
+  precision: 'year' | 'month' | 'day';
+}
+
+/** Parse supported genealogy dates without relying on locale-dependent Date parsing. */
+export function parseGenealogyDate(dateStr?: string): ParsedDate | null {
+  if (!dateStr?.trim()) return null;
+  const value = dateStr.trim();
+  let year: number, month = 1, day = 1;
+  let precision: ParsedDate['precision'] = 'year';
+  let match: RegExpMatchArray | null;
+
+  if ((match = value.match(/^(\d{4})$/))) year = Number(match[1]);
+  else if ((match = value.match(/^(\d{4})[-/.](\d{1,2})$/))) {
+    year = Number(match[1]); month = Number(match[2]); precision = 'month';
+  } else if ((match = value.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/))) {
+    year = Number(match[1]); month = Number(match[2]); day = Number(match[3]); precision = 'day';
+  } else if ((match = value.match(/^(\d{1,2})[./-](\d{4})$/))) {
+    month = Number(match[1]); year = Number(match[2]); precision = 'month';
+  } else if ((match = value.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/))) {
+    day = Number(match[1]); month = Number(match[2]); year = Number(match[3]); precision = 'day';
+  } else return null;
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (year < 1 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return { timestamp: date.getTime(), precision };
+}
+
+/** Sort known dates chronologically and leave unknown dates at the end (stable for ties). */
+export function compareGenealogyDates(left?: string, right?: string): number {
+  const a = parseGenealogyDate(left);
+  const b = parseGenealogyDate(right);
+  if (!a) return b ? 1 : 0;
+  if (!b) return -1;
+  return a.timestamp - b.timestamp;
+}
+
+export function getGenderPresentation(gender: Gender | string | null | undefined): { symbol: string; label: string } {
+  if (gender === 'male') return { symbol: '♂', label: 'Мужчина' };
+  if (gender === 'female') return { symbol: '♀', label: 'Женщина' };
+  if (gender === 'other') return { symbol: '⚧', label: 'Другой пол' };
+  return { symbol: '○', label: 'Пол не указан' };
+}
+
 export function isFormerMarriage(rel: RelationshipRecord): boolean {
   return rel.type === 'former-spouse'
     || (rel.type === 'marriage' || rel.type === 'spouse')

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Person, RelationshipRecord } from '../../types/genealogy';
-import { formatFullName, calculateAge, getParents, getChildren, getSpouses } from '../../utils/kinship';
+import { formatFullName, calculateAge, getParents, getChildren, getSpouses, compareGenealogyDates, getGenderPresentation, parseGenealogyDate } from '../../utils/kinship';
 import { 
   Search, 
   Filter, 
@@ -56,9 +56,11 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
         if (sortBy === 'name') {
           return a.lastName.localeCompare(b.lastName, 'ru');
         }
-        const aYear = a.birthDate ? parseInt(a.birthDate.match(/\d{4}/)?.[0] || '9999', 10) : 9999;
-        const bYear = b.birthDate ? parseInt(b.birthDate.match(/\d{4}/)?.[0] || '9999', 10) : 9999;
-        return sortBy === 'birthAsc' ? aYear - bYear : bYear - aYear;
+        const aDate = parseGenealogyDate(a.birthDate);
+        const bDate = parseGenealogyDate(b.birthDate);
+        if (!aDate || !bDate) return aDate ? -1 : bDate ? 1 : 0;
+        const comparison = compareGenealogyDates(a.birthDate, b.birthDate);
+        return sortBy === 'birthAsc' ? comparison : -comparison;
       });
   }, [persons, genderFilter, statusFilter, sortBy, searchQuery]);
 
@@ -174,11 +176,10 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
                       <h3 className="text-sm font-serif font-bold text-stone-900 group-hover:text-amber-900 truncate">
                         {formatFullName(person, { format: 'formal' })}
                       </h3>
-                      {person.gender === 'female' ? (
-                        <span className="text-rose-500 text-xs font-bold">♀</span>
-                      ) : (
-                        <span className="text-sky-600 text-xs font-bold">♂</span>
-                      )}
+                      {(() => {
+                        const gender = getGenderPresentation(person.gender);
+                        return <span aria-label={gender.label} title={gender.label} className={`text-xs font-bold ${person.gender === 'female' ? 'text-rose-500' : person.gender === 'male' ? 'text-sky-600' : 'text-violet-600'}`}>{gender.symbol}</span>;
+                      })()}
                     </div>
 
                     <p className="text-xs font-mono text-amber-900 mt-0.5">

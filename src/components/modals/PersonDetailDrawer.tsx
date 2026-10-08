@@ -21,6 +21,8 @@ import {
   getOtherRelationships,
   describeKinship,
   formatDisplayDate,
+  compareGenealogyDates,
+  getGenderPresentation,
   isFormerMarriage
 } from '../../utils/kinship';
 import { 
@@ -494,15 +496,12 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                   </div>
                 )}
               </div>
-              {person.gender === 'female' ? (
-                <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-rose-500 text-white flex items-center justify-center text-[10px] font-bold shadow-xs">
-                  ♀
-                </span>
-              ) : (
-                <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-sky-600 text-white flex items-center justify-center text-[10px] font-bold shadow-xs">
-                  ♂
-                </span>
-              )}
+              {(() => {
+                const gender = getGenderPresentation(person.gender);
+                return <span aria-label={gender.label} title={gender.label} className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full text-white flex items-center justify-center text-[10px] font-bold shadow-xs ${person.gender === 'female' ? 'bg-rose-500' : person.gender === 'male' ? 'bg-sky-600' : 'bg-violet-600'}`}>
+                  {gender.symbol}
+                </span>;
+              })()}
             </div>
 
             {/* Name and main titles */}
@@ -647,7 +646,7 @@ export const PersonDetailDrawer: React.FC<PersonDetailDrawerProps> = ({
                 <div className="relative pl-6 space-y-6 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-stone-200">
                   {person.significantDates
                     .slice()
-                    .sort((a, b) => (a.date > b.date ? 1 : -1))
+                    .sort((a, b) => compareGenealogyDates(a.date, b.date))
                     .map((item) => (
                       <div key={item.id} className="relative group">
                         {/* Dot indicator */}

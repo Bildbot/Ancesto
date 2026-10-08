@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Person, SignificantDate } from '../../types/genealogy';
-import { formatFullName, formatDisplayDate } from '../../utils/kinship';
+import { formatFullName, formatDisplayDate, compareGenealogyDates, extractYear } from '../../utils/kinship';
 import { Calendar, MapPin, Search, Filter, User, ChevronRight } from 'lucide-react';
 
 interface TimelineViewProps {
@@ -11,7 +11,7 @@ interface TimelineViewProps {
 interface TimelineEntry {
   id: string;
   dateStr: string;
-  year: number;
+      year: number;
   person: Person;
   title: string;
   location?: string;
@@ -28,11 +28,7 @@ export const TimelineView: React.FC<TimelineViewProps> = ({ persons, onSelectPer
   const allEvents = useMemo(() => {
     const list: TimelineEntry[] = [];
 
-    const parseYear = (str?: string): number => {
-      if (!str) return 0;
-      const m = str.match(/\b(18|19|20)\d{2}\b/);
-      return m ? parseInt(m[0], 10) : 0;
-    };
+    const parseYear = (str?: string): number => extractYear(str) ?? 0;
 
     persons.forEach(person => {
       // Birth event
@@ -79,7 +75,7 @@ export const TimelineView: React.FC<TimelineViewProps> = ({ persons, onSelectPer
     });
 
     // Sort chronologically ascending
-    list.sort((a, b) => a.year - b.year);
+    list.sort((a, b) => compareGenealogyDates(a.dateStr, b.dateStr));
     return list;
   }, [persons]);
 

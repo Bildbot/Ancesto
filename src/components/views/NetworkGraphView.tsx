@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { Person, RelationshipRecord } from '../../types/genealogy';
-import { formatFullName, describeKinship, isFormerMarriage } from '../../utils/kinship';
+import { formatFullName, describeKinship, isFormerMarriage, getGenderPresentation } from '../../utils/kinship';
 import { ZoomIn, ZoomOut, RotateCcw, Users, Heart, Share2, Sparkles } from 'lucide-react';
 
 interface NetworkGraphViewProps {
@@ -370,6 +370,9 @@ export const NetworkGraphView: React.FC<NetworkGraphViewProps> = ({
                       {relationToCenter}
                     </span>
                   )}
+                  <span aria-label={getGenderPresentation(person.gender).label} title={getGenderPresentation(person.gender).label} className={`text-[10px] font-bold ${person.gender === 'female' ? 'text-rose-500' : person.gender === 'male' ? 'text-sky-600' : 'text-violet-600'}`}>
+                    {getGenderPresentation(person.gender).symbol}
+                  </span>
                 </div>
               </div>
             );
