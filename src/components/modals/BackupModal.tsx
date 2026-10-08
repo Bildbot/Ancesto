@@ -11,7 +11,7 @@ interface BackupModalProps {
   isOpen: boolean;
   onClose: () => void;
   treeData: FamilyTreeData;
-  onImportData: (data: FamilyTreeData) => void;
+  onImportData: (data: FamilyTreeData) => Promise<void>;
   onResetToDemo: () => void;
   onClearTree: () => void;
 }
@@ -261,11 +261,19 @@ export const BackupModal: React.FC<BackupModalProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      onImportData(pendingImport);
-                      setPendingImport(null);
-                      setStatusMessage({ text: 'Семейный архив успешно загружен!', type: 'success' });
-                      setTimeout(onClose, 1200);
+                    onClick={async () => {
+                      setIsBusy(true);
+                      setStatusMessage(null);
+                      try {
+                        await onImportData(pendingImport);
+                        setPendingImport(null);
+                        setStatusMessage({ text: 'Семейный архив успешно загружен!', type: 'success' });
+                        setTimeout(onClose, 1200);
+                      } catch (error) {
+                        showError(error);
+                      } finally {
+                        setIsBusy(false);
+                      }
                     }}
                     className="px-3 py-1.5 text-xs font-bold rounded-lg bg-amber-600 hover:bg-amber-700 text-white"
                   >

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { importTreeFromGedcom, normalizeTreeData, saveFamilyTree, validateImportedData } from './db';
+import { importTreeFromGedcom, loadFamilyTree, normalizeTreeData, saveFamilyTree, validateImportedData } from './db';
 import type { FamilyTreeData, Person } from '../types/genealogy';
 import { INITIAL_DEMO_DATA } from '../data/demoFamily';
 
@@ -245,20 +245,13 @@ describe('BackupService contract', () => {
 
 describe('TreeRepository contract', () => {
   it('propagates an IndexedDB write failure to its caller', async () => {
-    const putRequest = {} as IDBRequest<IDBValidKey>;
-    Object.defineProperty(putRequest, 'error', {
-      configurable: true,
-      value: new Error('IndexedDB write failed'),
-    });
+    const transaction: { objectStore: () => { put: () => void }; onabort?: (event: Event) => void; error: Error } = {
+      objectStore: () => ({ put: () => undefined }),
+      error: new Error('IndexedDB write failed'),
+    };
     const database = {
-      transaction: () => ({
-        objectStore: () => ({
-          put: () => {
-            queueMicrotask(() => putRequest.onerror?.(new Event('error')));
-            return putRequest;
-          },
-        }),
-      }),
+      close: vi.fn(),
+      transaction: () => transaction,
     } as unknown as IDBDatabase;
     const openRequest = {} as IDBOpenDBRequest;
 
@@ -270,7 +263,10 @@ describe('TreeRepository contract', () => {
       configurable: true,
       value: {
         open: () => {
-          queueMicrotask(() => openRequest.onsuccess?.(new Event('success')));
+          queueMicrotask(() => {
+            openRequest.onsuccess?.(new Event('success'));
+            setTimeout(() => transaction.onabort?.(new Event('abort')), 0);
+          });
           Object.defineProperty(openRequest, 'result', { configurable: true, value: database });
           return openRequest;
         },
@@ -285,17 +281,16 @@ describe('TreeRepository contract', () => {
   });
 
   it('serializes writes so a later tree snapshot cannot finish first', async () => {
-    const putRequests: IDBRequest<IDBValidKey>[] = [];
+    const transactions: Array<{ oncomplete?: (event: Event) => void }> = [];
     const database = {
-      transaction: () => ({
-        objectStore: () => ({
-          put: () => {
-            const request = {} as IDBRequest<IDBValidKey>;
-            putRequests.push(request);
-            return request;
-          },
-        }),
-      }),
+      close: vi.fn(),
+      transaction: () => {
+        const transaction: { oncomplete?: (event: Event) => void; objectStore: () => { put: () => void } } = {
+          objectStore: () => ({ put: () => undefined }),
+        };
+        transactions.push(transaction);
+        return transaction;
+      },
     } as unknown as IDBDatabase;
 
     Object.defineProperty(globalThis, 'localStorage', {
@@ -320,15 +315,68 @@ describe('TreeRepository contract', () => {
 
     const firstSave = saveFamilyTree({ ...treeData, description: 'первая версия' });
     const secondSave = saveFamilyTree({ ...treeData, description: 'вторая версия' });
-    await new Promise<void>((resolve) => queueMicrotask(resolve));
-    await new Promise<void>((resolve) => queueMicrotask(resolve));
-
-    expect(putRequests).toHaveLength(1);
-    putRequests[0].onsuccess?.(new Event('success'));
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-    expect(putRequests).toHaveLength(2);
-    putRequests[1].onsuccess?.(new Event('success'));
+    expect(transactions).toHaveLength(1);
+    transactions[0].oncomplete?.(new Event('complete'));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(transactions).toHaveLength(2);
+    transactions[1].oncomplete?.(new Event('complete'));
     await expect(Promise.all([firstSave, secondSave])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it('does not resolve on put success when the transaction later aborts', async () => {
+    const transaction: { objectStore: () => { put: () => IDBRequest<IDBValidKey> }; onabort?: (event: Event) => void; error: Error } = {
+      objectStore: () => ({ put: () => ({ onsuccess: null } as unknown as IDBRequest<IDBValidKey>) }),
+      error: new Error('aborted after put'),
+    };
+    const db = { transaction: () => transaction, close: vi.fn() } as unknown as IDBDatabase;
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { setItem: vi.fn() } });
+    Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: { open: () => { const r = {} as IDBOpenDBRequest; Object.defineProperty(r, 'result', { value: db }); queueMicrotask(() => r.onsuccess?.(new Event('success'))); return r; } } });
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { indexedDB: globalThis.indexedDB } });
+    const saving = saveFamilyTree(treeData);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    transaction.onabort?.(new Event('abort'));
+    await expect(saving).rejects.toThrow('aborted after put');
+    expect(db.close).toHaveBeenCalledOnce();
+  });
+
+  it('writes a payload-free localStorage backup after IndexedDB commit and tolerates quota errors', async () => {
+    const transaction: { objectStore: () => { put: (data: FamilyTreeData) => void }; oncomplete?: (event: Event) => void } = {
+      objectStore: () => ({ put: () => undefined }),
+    };
+    const db = { transaction: () => transaction, close: vi.fn() } as unknown as IDBDatabase;
+    const setItem = vi.fn(() => { throw new DOMException('quota', 'QuotaExceededError'); });
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { setItem } });
+    Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: { open: () => { const r = {} as IDBOpenDBRequest; Object.defineProperty(r, 'result', { value: db }); queueMicrotask(() => r.onsuccess?.(new Event('success'))); return r; } } });
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { indexedDB: globalThis.indexedDB } });
+    const saving = saveFamilyTree({ ...treeData, mediaArchive: [{ id: 'm', type: 'photo', name: 'image', dataUrl: `data:image/png;base64,${'A'.repeat(100000)}` }] });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    transaction.oncomplete?.(new Event('complete'));
+    await expect(saving).resolves.toBeUndefined();
+    expect(setItem).toHaveBeenCalledOnce();
+    expect(db.close).toHaveBeenCalledOnce();
+  });
+
+  it('rejects corrupt IndexedDB data without replacing it', async () => {
+    const transaction = { objectStore: () => ({ get: () => { const request = {} as IDBRequest; Object.defineProperty(request, 'result', { value: { persons: [{ id: 'bad' }] } }); queueMicrotask(() => request.onsuccess?.(new Event('success'))); return request; } }) };
+    const db = { transaction: () => transaction, close: vi.fn() } as unknown as IDBDatabase;
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: vi.fn(() => null), setItem: vi.fn() } });
+    Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: { open: () => { const r = {} as IDBOpenDBRequest; Object.defineProperty(r, 'result', { value: db }); queueMicrotask(() => r.onsuccess?.(new Event('success'))); return r; } } });
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { indexedDB: globalThis.indexedDB } });
+    await expect(loadFamilyTree()).rejects.toThrow('повреждён');
+    expect(globalThis.localStorage.setItem).not.toHaveBeenCalled();
+  });
+
+  it('rejects corrupt localStorage fallback without rewriting it', async () => {
+    const original = JSON.stringify({ treeName: 'damaged', persons: [{ id: 'broken' }], relationships: [] });
+    const setItem = vi.fn();
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => original, setItem } });
+    Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: { open: () => { const request = {} as IDBOpenDBRequest; queueMicrotask(() => request.onerror?.(new Event('error'))); return request; } } });
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { indexedDB: globalThis.indexedDB } });
+    await expect(loadFamilyTree()).rejects.toThrow();
+    expect(setItem).not.toHaveBeenCalled();
+    expect(globalThis.localStorage.getItem('genealogy_user_tree_backup')).toBe(original);
   });
 });

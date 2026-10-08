@@ -287,6 +287,12 @@ export default function App() {
     }
   }, []);
 
+  const importTreeData = useCallback(async (newData: FamilyTreeData) => {
+    await saveFamilyTree(newData);
+    setTreeData(newData);
+    setSaveError(null);
+  }, []);
+
   const handleUpdateFaceRecognitionData = useCallback(async (updatedPersons: Person[], updatedArchive: MediaItem[]) => {
     const nextData: FamilyTreeData = {
       ...treeDataRef.current,
@@ -664,7 +670,7 @@ export default function App() {
           isOpen={isBackupModalOpen}
           onClose={() => setIsBackupModalOpen(false)}
           treeData={treeData}
-          onImportData={updateTreeData}
+          onImportData={importTreeData}
           onResetToDemo={handleResetToDemo}
           onClearTree={handleClearTree}
         />

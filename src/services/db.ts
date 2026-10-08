@@ -257,28 +257,39 @@ export function normalizeTreeData(data: FamilyTreeData): FamilyTreeData {
 export async function loadFamilyTree(): Promise<FamilyTreeData> {
   if (isTauriDesktop()) {
     const data = await loadNativeTree();
-    return data ? normalizeTreeData(data) : EMPTY_TREE_DATA;
+    if (!data) return EMPTY_TREE_DATA;
+    const validated = validateStoredData(data);
+    if (!validated) throw new Error('Сохранённый архив повреждён. Исходные данные оставлены без изменений.');
+    return validated;
   }
 
   try {
     const db = await openDatabase();
-    return new Promise((resolve) => {
-      const transaction = db.transaction(STORE_NAME, 'readonly');
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction(STORE_NAME, 'readonly');
       const store = transaction.objectStore(STORE_NAME);
       const getRequest = store.get(TREE_KEY);
 
-      getRequest.onsuccess = () => {
-        if (getRequest.result && Array.isArray(getRequest.result.persons)) {
-          const normalized = normalizeTreeData(getRequest.result);
+        getRequest.onsuccess = () => {
+        if (getRequest.result !== undefined) {
+          const normalized = validateStoredData(getRequest.result);
+          if (!normalized) {
+            reject(new Error('Сохранённый архив IndexedDB повреждён. Исходные данные оставлены без изменений.'));
+            return;
+          }
           resolve(normalized);
         } else {
           // Check LocalStorage fallback
           const localData = getLocalStorageFallback();
-          if (localData && Array.isArray(localData.persons)) {
+          if (localData) {
             const normalized = normalizeTreeData(localData);
             saveFamilyTree(normalized);
             resolve(normalized);
           } else {
+            if (hasLocalStorageFallback()) {
+              reject(new Error('Резервная копия localStorage повреждена. Исходные данные оставлены без изменений.'));
+              return;
+            }
             // Initialize with empty clean tree
             saveFamilyTree(EMPTY_TREE_DATA);
             resolve(EMPTY_TREE_DATA);
@@ -288,13 +299,18 @@ export async function loadFamilyTree(): Promise<FamilyTreeData> {
 
       getRequest.onerror = () => {
         const localData = getLocalStorageFallback();
-        resolve(localData ? normalizeTreeData(localData) : EMPTY_TREE_DATA);
+        if (localData) resolve(normalizeTreeData(localData));
+        else reject(getRequest.error || new Error('Не удалось прочитать IndexedDB'));
       };
+      transaction.onabort = () => reject(transaction.error || new Error('Транзакция чтения IndexedDB отменена'));
+      transaction.onerror = () => reject(transaction.error || new Error('Ошибка транзакции чтения IndexedDB'));
+      transaction.oncomplete = () => db.close();
     });
   } catch (error) {
     console.warn('IndexedDB failed, using localStorage:', error);
     const localData = getLocalStorageFallback();
-    return localData ? normalizeTreeData(localData) : EMPTY_TREE_DATA;
+    if (localData) return normalizeTreeData(localData);
+    throw error;
   }
 }
 
@@ -323,41 +339,29 @@ async function saveFamilyTreeNow(data: FamilyTreeData): Promise<void> {
     return;
   }
 
-  // Always attempt LocalStorage backup (ignoring quota errors if media too large)
-  try {
-    localStorage.setItem(LOCAL_STORAGE_BACKUP_KEY, JSON.stringify(updatedData));
-  } catch (e) {
-    // If media is very large, try saving without heavy media dataUrls in LocalStorage as fallback
-    try {
-      const strippedData = {
-        ...updatedData,
-        persons: updatedData.persons.map(p => ({
-          ...p,
-          mediaFiles: p.mediaFiles.map(m => ({
-            ...m,
-            dataUrl: m.dataUrl.length > 50000 ? '' : m.dataUrl
-          }))
-        }))
-      };
-      localStorage.setItem(LOCAL_STORAGE_BACKUP_KEY, JSON.stringify(strippedData));
-    } catch {
-      // LocalStorage full, ignore since IndexedDB handles hundreds of megabytes
-    }
-  }
-
   // Save to IndexedDB
   try {
     const db = await openDatabase();
-    return new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction(STORE_NAME, 'readwrite');
       const store = transaction.objectStore(STORE_NAME);
-      const putRequest = store.put(updatedData, TREE_KEY);
-
-      putRequest.onsuccess = () => resolve();
-      putRequest.onerror = () => reject(putRequest.error);
+      store.put(updatedData, TREE_KEY);
+      transaction.onabort = () => { db.close(); reject(transaction.error || new Error('Транзакция IndexedDB отменена')); };
+      transaction.onerror = () => { db.close(); reject(transaction.error || new Error('Ошибка транзакции IndexedDB')); };
+      transaction.oncomplete = () => { db.close(); resolve(); };
     });
+    try {
+      localStorage.setItem(LOCAL_STORAGE_BACKUP_KEY, JSON.stringify(createLocalStorageFallback(updatedData)));
+    } catch {
+      // IndexedDB is authoritative; fallback is best effort when quota is exhausted.
+    }
   } catch (error) {
     console.error('Failed to save in IndexedDB:', error);
+    try {
+      localStorage.setItem(LOCAL_STORAGE_BACKUP_KEY, JSON.stringify(createLocalStorageFallback(updatedData)));
+    } catch {
+      // Preserve the IndexedDB error; the fallback is only best effort.
+    }
     throw error;
   }
 }
@@ -367,14 +371,33 @@ function getLocalStorageFallback(): FamilyTreeData | null {
     const item = localStorage.getItem(LOCAL_STORAGE_BACKUP_KEY);
     if (item) {
       const parsed = JSON.parse(item);
-      if (parsed && Array.isArray(parsed.persons)) {
-        return parsed;
-      }
+      return validateStoredData(parsed);
     }
   } catch {
     // ignore
   }
   return null;
+}
+
+function hasLocalStorageFallback(): boolean {
+  try {
+    return localStorage.getItem(LOCAL_STORAGE_BACKUP_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function createLocalStorageFallback(data: FamilyTreeData): FamilyTreeData {
+  const withoutPayload = (media: MediaItem): MediaItem => ({ ...media, dataUrl: '' });
+  return {
+    ...data,
+    persons: data.persons.map((person) => ({ ...person, mediaFiles: person.mediaFiles.map(withoutPayload) })),
+    mediaArchive: data.mediaArchive?.map(withoutPayload) ?? [],
+  };
+}
+
+function validateStoredData(value: unknown): FamilyTreeData | null {
+  return validateImportedData(value);
 }
 
 /**
@@ -548,8 +571,9 @@ export function validateImportedData(raw: unknown): FamilyTreeData | null {
     || !Array.isArray(raw.persons)
     || !Array.isArray(raw.relationships)
     || (raw.mediaArchive !== undefined && !Array.isArray(raw.mediaArchive))
-    || typeof raw.version !== 'number'
+    || raw.version !== 1
     || typeof raw.lastModified !== 'number'
+    || !Number.isFinite(raw.lastModified)
     || !raw.persons.every(isValidPerson)
     || (Array.isArray(raw.mediaArchive) && !raw.mediaArchive.every(isValidMediaItem))) {
     return null;
