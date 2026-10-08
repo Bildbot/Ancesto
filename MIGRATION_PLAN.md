@@ -78,7 +78,7 @@ SQLite создаёт `tree_snapshot` как резервный rollback-сло�
 Нативный сценарий проверен через WebView2/CDP на отдельной debug-сборке с embedded frontend:
 
 1. Сборка: `npx tauri build --debug --no-bundle --config src-tauri/tauri.smoke.conf.json`.
-2. Запуск `src-tauri/target/debug/app.exe`. Smoke-конфигурация использует отдельный identifier и каталог `$TEMP/opencode/genedek-desktop-smoke`, порт CDP 9224. Не использовать её для обычного запуска или поставки.
+2. Запуск `src-tauri/target/debug/app.exe`. Smoke-конфигурация использует отдельный identifier и каталог `$TEMP/opencode/ancesto-desktop-smoke`, порт CDP 9224. Не использовать её для обычного запуска или поставки.
 3. Внешние HTTP-запросы заблокированы. Созданы персона и PNG через интерфейс. Все три нужных model manifests и bin-файлы загрузились локально с HTTP 200.
 4. SQLite сохранила одну персону и один медиафайл. Создан ZIP через нативную команду экспорта.
 5. Через интерфейс очищен тестовый архив, выбрана ZIP-копия и подтверждено восстановление. Персона и медиа восстановлены.

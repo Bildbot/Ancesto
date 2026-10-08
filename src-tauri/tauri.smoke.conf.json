@@ -1,11 +1,11 @@
 {
-  "identifier": "com.bildbot.genedek.smoke",
+  "identifier": "app.ancesto.desktop.smoke",
   "app": {
-    "appDirectoriesOverride": "$TEMP/opencode/genedek-desktop-smoke",
+    "appDirectoriesOverride": "$TEMP/opencode/ancesto-desktop-smoke",
     "windows": [
       {
         "label": "main",
-        "title": "Genedek — isolated smoke test",
+        "title": "Ancesto — isolated smoke test",
         "width": 1280,
         "height": 850,
         "additionalBrowserArgs": "--remote-debugging-port=9224 --remote-debugging-address=127.0.0.1"

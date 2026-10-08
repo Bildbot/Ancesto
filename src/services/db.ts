@@ -551,7 +551,7 @@ export function createGedcomContent(data: FamilyTreeData, exportDate = new Date(
   const orderedFamilies = [...families.values()].sort((a, b) => a.key.localeCompare(b.key));
   const familyXref = new Map(orderedFamilies.map((family, index) => [family.key, `@F${index + 1}@`]));
   const lines = [
-    '0 HEAD', '1 SOUR RODOSLOVNAYA', '2 NAME Родословная', '2 VERS 1.0',
+    '0 HEAD', '1 SOUR Ancesto', '2 NAME Ancesto', '2 VERS 1.0',
     '1 GEDC', '2 VERS 5.5.1', '2 FORM LINEAGE-LINKED', '1 CHAR UTF-8',
     `1 DATE ${String(exportDate.getDate()).padStart(2, '0')} ${GEDCOM_MONTHS[exportDate.getMonth()]} ${exportDate.getFullYear()}`,
   ];

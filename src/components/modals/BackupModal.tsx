@@ -41,8 +41,8 @@ export const BackupModal: React.FC<BackupModalProps> = ({
     setIsBusy(true);
     try {
       const destination = await save({
-        defaultPath: `genedek-${new Date().toISOString().slice(0, 10)}.zip`,
-        filters: [{ name: 'Резервная копия Genedek', extensions: ['zip'] }],
+        defaultPath: `ancesto-${new Date().toISOString().slice(0, 10)}.zip`,
+        filters: [{ name: 'Резервная копия Ancesto', extensions: ['zip'] }],
       });
       if (!destination) return;
       await saveFamilyTree(treeData);
@@ -112,7 +112,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
     setPendingZip(null);
     setStatusMessage(null);
     try {
-      const source = await open({ multiple: false, filters: [{ name: 'Резервная копия Genedek', extensions: ['zip'] }] });
+      const source = await open({ multiple: false, filters: [{ name: 'Резервная копия Ancesto', extensions: ['zip'] }] });
       if (typeof source !== 'string') return;
       const summary = await inspectNativeBackup(source);
       setPendingZip({ source, summary });

@@ -5,7 +5,7 @@ import { expect, it, vi } from 'vitest';
 it('deletes only outdated application caches during activation', async () => {
   const listeners = new Map<string, (event: { waitUntil: (promise: Promise<unknown>) => void }) => void>();
   const deleted: string[] = [];
-  const cacheNames = ['another-app-cache', 'rodoslovnaya-app-old', 'rodoslovnaya-app-current'];
+  const cacheNames = ['another-app-cache', 'ancesto-app-old', 'ancesto-app-current'];
   const claim = vi.fn().mockResolvedValue(undefined);
   const self = {
     registration: { scope: 'https://example.test/family/' },
@@ -17,12 +17,12 @@ it('deletes only outdated application caches during activation', async () => {
     delete: vi.fn(async (name: string) => { deleted.push(name); return true; }),
   };
 
-  const workerSource = readFileSync('public/sw.js', 'utf8').replace('__APP_CACHE_NAME__', 'rodoslovnaya-app-current');
+  const workerSource = readFileSync('public/sw.js', 'utf8').replace('__APP_CACHE_NAME__', 'ancesto-app-current');
   runInNewContext(workerSource, { self, caches, URL, Promise });
   let activation: Promise<unknown> | undefined;
   listeners.get('activate')!({ waitUntil: (promise) => { activation = promise; } });
   await activation;
 
-  expect(deleted).toEqual(['rodoslovnaya-app-old']);
+  expect(deleted).toEqual(['ancesto-app-old']);
   expect(claim).toHaveBeenCalledOnce();
 });

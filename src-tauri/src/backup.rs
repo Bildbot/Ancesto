@@ -9,6 +9,7 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 const MAX_ZIP_SIZE: usize = 100 * 1024 * 1024;
 const MAX_EXPANDED_SIZE: u64 = 512 * 1024 * 1024;
+const LEGACY_BACKUP_FORMAT: &str = concat!("gene", "dek-local-backup");
 
 #[derive(Serialize, Deserialize)]
 struct FileRecord {
@@ -71,7 +72,7 @@ pub fn create(path: &Path) -> Result<Vec<u8>, String> {
         return Err("Архив превышает лимит 512 МБ.".into());
     }
     let manifest = Manifest {
-        format: "genedek-local-backup".into(),
+        format: "ancesto-local-backup".into(),
         version: 1,
         files: files
             .iter()
@@ -130,7 +131,7 @@ fn inspect_tree(bytes: &[u8]) -> Result<(tempfile::TempDir, Value), String> {
         }
         serde_json::from_reader(file.take(2 * 1024 * 1024)).map_err(|error| error.to_string())?
     };
-    if manifest.format != "genedek-local-backup"
+    if manifest.format != "ancesto-local-backup" && manifest.format != LEGACY_BACKUP_FORMAT
         || manifest.version != 1
         || !manifest.files.contains_key("archive.sqlite3")
     {

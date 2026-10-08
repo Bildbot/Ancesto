@@ -2,11 +2,38 @@ mod backup;
 mod database;
 
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
 struct DatabasePath(PathBuf, Mutex<()>);
+
+fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_directory(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_previous_app_data(data_dir: &Path) -> std::io::Result<()> {
+    let Some(parent) = data_dir.parent() else {
+        return Ok(());
+    };
+    let previous_dir = parent.join(concat!("com.bildbot.", "gene", "dek"));
+    let previous_database = previous_dir.join("family-archive.sqlite3");
+    let current_database = data_dir.join("family-archive.sqlite3");
+    if previous_database.is_file() && !current_database.exists() {
+        copy_directory(&previous_dir, data_dir)?;
+    }
+    Ok(())
+}
 
 #[tauri::command]
 fn load_tree(state: State<'_, DatabasePath>) -> Result<Option<Value>, String> {
@@ -93,6 +120,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
+            migrate_previous_app_data(&data_dir)?;
             std::fs::create_dir_all(&data_dir)?;
             let database_path = data_dir.join("family-archive.sqlite3");
             database::open(&database_path).map_err(std::io::Error::other)?;
@@ -116,4 +144,48 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::migrate_previous_app_data;
+
+    #[test]
+    fn migrates_existing_desktop_archive_to_new_app_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let old_dir = parent.path().join(concat!("com.bildbot.", "gene", "dek"));
+        let new_dir = parent.path().join("app.ancesto.desktop");
+        std::fs::create_dir_all(old_dir.join("media")).unwrap();
+        std::fs::write(old_dir.join("family-archive.sqlite3"), b"archive").unwrap();
+        std::fs::write(old_dir.join("media/photo.bin"), b"photo").unwrap();
+
+        migrate_previous_app_data(&new_dir).unwrap();
+
+        assert_eq!(
+            std::fs::read(new_dir.join("family-archive.sqlite3")).unwrap(),
+            b"archive"
+        );
+        assert_eq!(
+            std::fs::read(new_dir.join("media/photo.bin")).unwrap(),
+            b"photo"
+        );
+    }
+
+    #[test]
+    fn does_not_overwrite_existing_ancesto_archive() {
+        let parent = tempfile::tempdir().unwrap();
+        let old_dir = parent.path().join(concat!("com.bildbot.", "gene", "dek"));
+        let new_dir = parent.path().join("app.ancesto.desktop");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::create_dir_all(&new_dir).unwrap();
+        std::fs::write(old_dir.join("family-archive.sqlite3"), b"old").unwrap();
+        std::fs::write(new_dir.join("family-archive.sqlite3"), b"new").unwrap();
+
+        migrate_previous_app_data(&new_dir).unwrap();
+
+        assert_eq!(
+            std::fs::read(new_dir.join("family-archive.sqlite3")).unwrap(),
+            b"new"
+        );
+    }
 }

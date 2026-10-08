@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn keeps_shared_content_until_the_last_archive_reference_is_removed() {
-        let directory = std::env::temp_dir().join(format!("genedek-shared-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("ancesto-shared-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("archive.sqlite3");
         let mut tree = json!({"treeName":"Test", "version":1, "lastModified":1,
@@ -778,7 +778,7 @@ mod tests {
     #[test]
     fn reports_a_missing_media_file() {
         let directory =
-            std::env::temp_dir().join(format!("genedek-missing-{}", std::process::id()));
+            std::env::temp_dir().join(format!("ancesto-missing-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("archive.sqlite3");
         let tree = json!({"treeName":"Test", "version":1, "lastModified":1,
@@ -810,7 +810,7 @@ mod tests {
     #[test]
     fn saves_archive_media_incrementally_without_requiring_a_full_tree() {
         let directory =
-            std::env::temp_dir().join(format!("genedek-incremental-{}", std::process::id()));
+            std::env::temp_dir().join(format!("ancesto-incremental-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("archive.sqlite3");
         save_tree(
@@ -846,7 +846,7 @@ mod tests {
     #[test]
     fn detects_corruption_and_preserves_archive_only_files_until_deleted() {
         let directory =
-            std::env::temp_dir().join(format!("genedek-integrity-{}", std::process::id()));
+            std::env::temp_dir().join(format!("ancesto-integrity-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("archive.sqlite3");
         let tree = json!({"treeName":"Test", "version":1, "lastModified":1,
@@ -1073,7 +1073,7 @@ mod tests {
     #[test]
     fn externalizes_media_and_returns_a_lazy_url_on_load() {
         let directory =
-            std::env::temp_dir().join(format!("genedek-sqlite-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("ancesto-sqlite-test-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let database_path = directory.join("archive.sqlite3");
         let tree = json!({
@@ -1166,7 +1166,7 @@ mod tests {
     #[test]
     fn loads_from_normalized_tables_without_a_snapshot() {
         let directory =
-            std::env::temp_dir().join(format!("genedek-normalized-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("ancesto-normalized-test-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let database_path = directory.join("archive.sqlite3");
         let tree = json!({

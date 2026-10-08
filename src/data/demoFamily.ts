@@ -43,7 +43,7 @@ const createDocumentScan = (title: string, date: string, type: 'metric' | 'diplo
 
 export const EMPTY_TREE_DATA: FamilyTreeData = {
   treeName: "Моё семейное древо",
-  description: "Родословная семьи и архив",
+  description: "Семейное древо и архив",
   version: 1,
   lastModified: Date.now(),
   persons: [],
@@ -53,7 +53,7 @@ export const EMPTY_TREE_DATA: FamilyTreeData = {
 
 export const INITIAL_DEMO_DATA: FamilyTreeData = {
   treeName: "Династия Морозовых и Соколовых",
-  description: "Родословная семьи с архивными выписками, вехами жизни и фотографиями с 1892 года по настоящее время.",
+  description: "Семейная история с архивными выписками, вехами жизни и фотографиями с 1892 года по настоящее время.",
   version: 1,
   lastModified: Date.now(),
   persons: [

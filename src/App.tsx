@@ -396,7 +396,7 @@ export default function App() {
             }}
             className="text-lg sm:text-xl font-serif font-bold tracking-tight text-amber-100 hover:text-white transition whitespace-nowrap"
           >
-            Родословная
+            Ancesto
           </a>
         </div>
 

@@ -1,4 +1,4 @@
-const CACHE_PREFIX = 'rodoslovnaya-app-';
+const CACHE_PREFIX = 'ancesto-app-';
 const CACHE_NAME = '__APP_CACHE_NAME__';
 const PRECACHE_URLS = [];
 const SCOPE_URL = new URL(self.registration.scope);

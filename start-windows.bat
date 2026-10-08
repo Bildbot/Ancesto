@@ -1,7 +1,7 @@
 @echo off
-title Rodoslovnaya - Family Tree
+title Ancesto - Family Tree
 echo ========================================================
-echo   Launching Rodoslovnaya Family Tree on Windows
+echo   Launching Ancesto Family Tree on Windows
 echo ========================================================
 echo.
 
@@ -36,7 +36,7 @@ if not exist dist (
 
 REM 4. Start server, wait for health-check, then open browser
 echo [INFO] Starting preview server...
-start "Rodoslovnaya server" /min cmd /c "npm run preview -- --host 127.0.0.1 --port 3000"
+start "Ancesto server" /min cmd /c "npm run preview -- --host 127.0.0.1 --port 3000"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$url='http://127.0.0.1:3000'; for($i=0; $i -lt 60; $i++){ try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2; if($r.StatusCode -eq 200){ exit 0 } } catch {}; Start-Sleep -Seconds 1 }; exit 1"
 if %errorlevel% neq 0 (
     echo [ERROR] Server did not become ready at http://127.0.0.1:3000

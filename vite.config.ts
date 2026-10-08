@@ -9,7 +9,7 @@ function pwaPrecachePlugin() {
   let precacheUrls: string[] = [];
 
   return {
-    name: 'rodoslovnaya-pwa-precache',
+    name: 'ancesto-pwa-precache',
     apply: 'build' as const,
     generateBundle(_options: unknown, bundle: Record<string, { type: string; fileName: string }>) {
       const publicFiles = ['index.html', 'manifest.json', 'icon.svg'];
@@ -24,7 +24,7 @@ function pwaPrecachePlugin() {
       const source = fs.readFileSync(workerPath, 'utf8');
       const version = crypto.createHash('sha256').update(precacheUrls.join('\n')).digest('hex').slice(0, 12);
       const worker = source
-        .replace('__APP_CACHE_NAME__', `rodoslovnaya-app-${version}`)
+        .replace('__APP_CACHE_NAME__', `ancesto-app-${version}`)
         .replace('const PRECACHE_URLS = [];', `const PRECACHE_URLS = ${JSON.stringify(precacheUrls)};`);
       fs.writeFileSync(workerPath, worker);
     },
