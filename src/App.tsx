@@ -15,6 +15,7 @@ import { isTauriDesktop, saveNativeArchiveMedia } from './services/nativeTreeRep
 import { getParents, getSpouses } from './utils/kinship';
 import { removeRelationship } from './utils/relationships';
 import { syncTaggedMediaAcrossPersons } from './services/faceRecognition';
+import { deletePersonFromTree } from './domain/personDeletion';
 import { FamilyTreeView } from './components/views/FamilyTreeView';
 import { NetworkGraphView } from './components/views/NetworkGraphView';
 import { TimelineView } from './components/views/TimelineView';
@@ -219,21 +220,23 @@ export default function App() {
   };
 
   // Delete person handler
-  const handleDeletePerson = (personId: string) => {
-    const nextPersons = treeData.persons.filter((p) => p.id !== personId);
-    const nextRelations = treeData.relationships.filter(
-      (r) => r.person1Id !== personId && r.person2Id !== personId
-    );
-
-    updateTreeData({
-      ...treeData,
-      persons: nextPersons,
-      relationships: nextRelations
-    });
+  const handleDeletePerson = async (personId: string): Promise<boolean> => {
+    const nextData = deletePersonFromTree(treeDataRef.current, personId);
+    try {
+      await saveFamilyTree(nextData);
+      treeDataRef.current = nextData;
+      setTreeData(nextData);
+      setSaveError(null);
+    } catch (saveErr) {
+      console.error('Failed to delete person:', saveErr);
+      setSaveError('Не удалось удалить персону и сохранить изменения. Данные не изменены. Повторите попытку.');
+      return false;
+    }
 
     if (inspectedPersonId === personId) {
       setInspectedPersonId(null);
     }
+    return true;
   };
 
   // Open add person with relative preset

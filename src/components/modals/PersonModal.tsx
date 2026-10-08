@@ -67,7 +67,7 @@ interface PersonModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (person: Person, newRelationships?: PendingRelationship[]) => void;
-  onDelete?: (personId: string) => void;
+  onDelete?: (personId: string) => void | boolean | Promise<void | boolean>;
   allPersons: Person[];
   relationships: RelationshipRecord[];
   onOpenPerson?: (personId: string) => void;
@@ -169,6 +169,8 @@ export const PersonModal: React.FC<PersonModalProps> = ({
   const [relationshipEndDateUnknown, setRelationshipEndDateUnknown] = useState(false);
   const [relationshipDateError, setRelationshipDateError] = useState('');
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [inspectingFaceMedia, setInspectingFaceMedia] = useState<MediaItem | null>(null);
   const [isProcessingAvatar, setIsProcessingAvatar] = useState(false);
 
@@ -1611,15 +1613,26 @@ export const PersonModal: React.FC<PersonModalProps> = ({
                 ) : (
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-red-700 font-medium">Точно удалить?</span>
+                    {deleteError && <span role="alert" className="text-xs text-red-700">{deleteError}</span>}
                     <button
                       type="button"
-                      onClick={() => {
-                        onDelete(person.id);
-                        onClose();
+                      disabled={isDeleting}
+                      onClick={async () => {
+                        setIsDeleting(true);
+                        setDeleteError(null);
+                        try {
+                          const deleted = await onDelete(person.id);
+                          if (deleted !== false) onClose();
+                          else setDeleteError('Удаление не сохранено. Повторите попытку.');
+                        } catch {
+                          setDeleteError('Удаление не сохранено. Повторите попытку.');
+                        } finally {
+                          setIsDeleting(false);
+                        }
                       }}
                       className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-red-600 hover:bg-red-700 text-white shadow-xs"
                     >
-                      Да, удалить
+                      {isDeleting ? 'Удаление…' : 'Да, удалить'}
                     </button>
                     <button
                       type="button"

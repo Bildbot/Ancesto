@@ -836,6 +836,25 @@ mod tests {
     }
 
     #[test]
+    fn saves_deleted_person_tree_without_foreign_key_violations() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate(&connection).unwrap();
+        let tree = json!({
+            "treeName": "Тест", "lastModified": 2, "version": 1,
+            "persons": [{"id":"kept", "mediaFiles":[]}],
+            "relationships": [],
+            "mediaArchive": [{
+                "id":"photo", "manualPersonIds":["kept"],
+                "faces":[{"id":"face", "mediaId":"photo", "rejectedPersonIds":["kept"]}]
+            }]
+        });
+        save_snapshot(&mut connection, &tree).unwrap();
+        let violations: i64 = connection.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| row.get(0)).unwrap();
+        assert_eq!(violations, 0);
+        assert_eq!(load_normalized_tree(&connection).unwrap().unwrap()["persons"][0]["id"], "kept");
+    }
+
+    #[test]
     fn externalizes_media_and_hydrates_it_on_load() {
         let directory =
             std::env::temp_dir().join(format!("genedek-sqlite-test-{}", std::process::id()));
