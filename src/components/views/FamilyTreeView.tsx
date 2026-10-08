@@ -1326,14 +1326,6 @@ export const FamilyTreeView: React.FC<FamilyTreeViewProps> = ({
                         </div>
                       )}
                     </div>
-                    {/* Gender badge */}
-                    <span 
-                      className={`absolute bottom-2 right-2 w-4 h-4 rounded-full text-white flex items-center justify-center text-[9px] font-bold shadow-2xs ring-2 ring-white ${
-                        person.gender === 'female' ? 'bg-rose-500' : 'bg-sky-600'
-                      }`}
-                    >
-                      {person.gender === 'female' ? '♀' : '♂'}
-                    </span>
                     </div>
 
                     {/* Text details */}
