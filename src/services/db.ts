@@ -418,57 +418,122 @@ export function exportTreeAsJson(data: FamilyTreeData): void {
   URL.revokeObjectURL(url);
 }
 
-/**
- * Export tree data to standard GEDCOM 5.5 format
- */
-export function exportTreeAsGedcom(data: FamilyTreeData): void {
-  const lines: string[] = [
-    '0 HEAD',
-    '1 SOUR RODOSLOVNAYA',
-    '2 NAME Родословная',
-    '2 VERS 1.0',
-    '1 GEDC',
-    '2 VERS 5.5.1',
-    '2 FORM LINEAGE-LINKED',
-    '1 CHAR UTF-8',
-    '1 DATE ' + new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase(),
-  ];
+function gedcomText(value: string): string {
+  return value.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
-  // Map persons to INDI records
-  for (const person of data.persons) {
-    lines.push(`0 @I${person.id.replace(/[^a-zA-Z0-9]/g, '')}@ INDI`);
-    const surname = person.lastName ? `/${person.lastName}/` : '';
-    const given = [person.firstName, person.patronymic].filter(Boolean).join(' ');
-    lines.push(`1 NAME ${given} ${surname}`.trim());
-    if (person.maidenName) {
-      lines.push(`2 _MARNM ${person.maidenName}`);
-    }
+const GEDCOM_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+/** Convert the application's ISO-like dates into GEDCOM 5.5.1 date values. */
+export function formatGedcomDate(value: string): string {
+  const date = value.trim();
+  const full = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (full) {
+    const month = Number(full[2]);
+    const day = Number(full[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return `${day} ${GEDCOM_MONTHS[month - 1]} ${full[1]}`;
+  }
+  const month = date.match(/^(\d{4})-(\d{2})$/);
+  if (month) {
+    const number = Number(month[2]);
+    if (number >= 1 && number <= 12) return `${GEDCOM_MONTHS[number - 1]} ${month[1]}`;
+  }
+  if (/^\d{3,4}$/.test(date)) return date;
+  return gedcomText(date);
+}
+
+/** Build a deterministic GEDCOM 5.5.1 document. Non-core app fields are intentionally omitted. */
+export function createGedcomContent(data: FamilyTreeData, exportDate = new Date()): string {
+  const people = [...data.persons].sort((a, b) => a.id.localeCompare(b.id));
+  const personById = new Map(people.map((person, index) => [person.id, { person, xref: `@I${index + 1}@` }]));
+  type Family = { spouses: string[]; children: string[]; adopted: Set<string>; marriage?: RelationshipRecord; key: string };
+  const families = new Map<string, Family>();
+  const marriageRels = data.relationships.filter((rel) => rel.type === 'marriage' || rel.type === 'spouse' || rel.type === 'former-spouse');
+  const parentRels = data.relationships.filter((rel) => ['parent', 'adoptive-parent'].includes(rel.type));
+  const keyOf = (ids: string[]) => [...new Set(ids)].sort().join('\u0000');
+  const getFamily = (spouses: string[], marriage?: RelationshipRecord) => {
+    const key = keyOf(spouses);
+    let family = families.get(key);
+    if (!family) {
+      family = { spouses: [...new Set(spouses)], children: [], adopted: new Set(), marriage, key };
+      families.set(key, family);
+    } else if (marriage && !family.marriage) family.marriage = marriage;
+    return family;
+  };
+  for (const marriage of marriageRels) getFamily([marriage.person1Id, marriage.person2Id], marriage);
+  const parentsByChild = new Map<string, string[]>();
+  for (const rel of parentRels) {
+    const list = parentsByChild.get(rel.person2Id) || [];
+    list.push(rel.person1Id);
+    parentsByChild.set(rel.person2Id, list);
+  }
+  for (const rel of parentRels) {
+    const parents = parentsByChild.get(rel.person2Id) || [rel.person1Id];
+    const family = getFamily(parents);
+    if (!family.children.includes(rel.person2Id)) family.children.push(rel.person2Id);
+    if (rel.type === 'adoptive-parent') family.adopted.add(rel.person2Id);
+  }
+  const orderedFamilies = [...families.values()].sort((a, b) => a.key.localeCompare(b.key));
+  const familyXref = new Map(orderedFamilies.map((family, index) => [family.key, `@F${index + 1}@`]));
+  const lines = [
+    '0 HEAD', '1 SOUR RODOSLOVNAYA', '2 NAME Родословная', '2 VERS 1.0',
+    '1 GEDC', '2 VERS 5.5.1', '2 FORM LINEAGE-LINKED', '1 CHAR UTF-8',
+    `1 DATE ${String(exportDate.getDate()).padStart(2, '0')} ${GEDCOM_MONTHS[exportDate.getMonth()]} ${exportDate.getFullYear()}`,
+  ];
+  for (const { person, xref } of personById.values()) {
+    lines.push(`0 ${xref} INDI`);
+    const given = gedcomText([person.firstName, person.patronymic].filter(Boolean).join(' '));
+    const surname = gedcomText(person.lastName);
+    lines.push(`1 NAME ${given}${surname ? ` /${surname}/` : ''}`.trim());
+    if (person.maidenName) lines.push(`2 _MARNM ${gedcomText(person.maidenName)}`);
     lines.push(`1 SEX ${person.gender === 'female' ? 'F' : person.gender === 'male' ? 'M' : 'U'}`);
-    
     if (person.birthDate || person.birthPlace) {
       lines.push('1 BIRT');
-      if (person.birthDate) lines.push(`2 DATE ${person.birthDate}`);
-      if (person.birthPlace) lines.push(`2 PLAC ${person.birthPlace}`);
+      if (person.birthDate) lines.push(`2 DATE ${formatGedcomDate(person.birthDate)}`);
+      if (person.birthPlace) lines.push(`2 PLAC ${gedcomText(person.birthPlace)}`);
     }
-
     if (person.isDeceased) {
       lines.push('1 DEAT');
-      if (person.deathDate) lines.push(`2 DATE ${person.deathDate}`);
-      if (person.deathPlace) lines.push(`2 PLAC ${person.deathPlace}`);
+      if (person.deathDate) lines.push(`2 DATE ${formatGedcomDate(person.deathDate)}`);
+      if (person.deathPlace) lines.push(`2 PLAC ${gedcomText(person.deathPlace)}`);
     }
-
-    if (person.occupation) {
-      lines.push(`1 OCCU ${person.occupation}`);
-    }
-
-    if (person.bio) {
-      lines.push(`1 NOTE ${person.bio.replace(/\n/g, ' ')}`);
+    if (person.occupation) lines.push(`1 OCCU ${gedcomText(person.occupation)}`);
+    if (person.bio) lines.push(`1 NOTE ${gedcomText(person.bio)}`);
+    for (const family of orderedFamilies) {
+      const ref = familyXref.get(family.key)!;
+      if (family.spouses.includes(person.id)) lines.push(`1 FAMS ${ref}`);
+      if (family.children.includes(person.id)) {
+        lines.push(`1 FAMC ${ref}`);
+        if (family.adopted.has(person.id)) lines.push('2 PEDI adopted');
+      }
     }
   }
-
+  for (const family of orderedFamilies) {
+    const xref = familyXref.get(family.key)!;
+    lines.push(`0 ${xref} FAM`);
+    const spouses = family.spouses.map((id) => personById.get(id)).filter((entry): entry is NonNullable<typeof entry> => !!entry);
+    const husband = spouses.find(({ person }) => person.gender === 'male')
+      || spouses.find(({ person }) => person.gender === 'other');
+    const wife = spouses.find(({ person }) => person.gender === 'female' && person.id !== husband?.person.id)
+      || spouses.find((entry) => entry.person.id !== husband?.person.id);
+    if (husband) lines.push(`1 HUSB ${husband.xref}`);
+    if (wife) lines.push(`1 WIFE ${wife.xref}`);
+    if (family.marriage?.startDate) lines.push(`1 MARR\n2 DATE ${formatGedcomDate(family.marriage.startDate)}`);
+    if (family.marriage?.endDate) lines.push(`1 DIV\n2 DATE ${formatGedcomDate(family.marriage.endDate)}`);
+    for (const childId of family.children) {
+      const child = personById.get(childId);
+      if (child) {
+        lines.push(`1 CHIL ${child.xref}`);
+      }
+    }
+  }
   lines.push('0 TRLR');
+  return `${lines.join('\n')}\n`;
+}
 
-  const gedcomContent = lines.join('\n');
+/** Download tree data as a GEDCOM 5.5.1 file. */
+export function exportTreeAsGedcom(data: FamilyTreeData): void {
+  const gedcomContent = createGedcomContent(data);
   const blob = new Blob([gedcomContent], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -548,14 +613,19 @@ export function importTreeFromGedcom(content: string, fileName = ''): FamilyTree
     if (!a || !b || a === b || relationships.some((rel) => rel.type === type && rel.person1Id === a && rel.person2Id === b)) return;
     relationships.push({ id: `gedcom-rel-${relationships.length + 1}-${suffix}`, person1Id: a, person2Id: b, type });
   };
+  const adoptedFamilyRefs = new Set<string>();
+  individuals.forEach((person) => person.children
+    .filter((child) => child.tag === 'FAMC' && child.children.some((part) => part.tag === 'PEDI' && part.value.toLowerCase() === 'adopted'))
+    .forEach((child) => adoptedFamilyRefs.add(`${person.value}|${child.value}`)));
   records.filter((record) => record.tag === 'FAM').forEach((family, familyIndex) => {
     const husband = idByXref.get(first(family, 'HUSB')?.value || '');
     const wife = idByXref.get(first(family, 'WIFE')?.value || '');
     addRelationship(husband, wife, 'marriage', String(familyIndex));
     family.children.filter((child) => child.tag === 'CHIL').forEach((child) => {
-      const personId = idByXref.get(child.value);
-      addRelationship(husband, personId, 'parent', String(familyIndex));
-      addRelationship(wife, personId, 'parent', String(familyIndex));
+        const personId = idByXref.get(child.value);
+      const adopted = adoptedFamilyRefs.has(`${child.value}|${family.value}`);
+      addRelationship(husband, personId, adopted ? 'adoptive-parent' : 'parent', String(familyIndex));
+      addRelationship(wife, personId, adopted ? 'adoptive-parent' : 'parent', String(familyIndex));
     });
   });
   return { persons, relationships, mediaArchive: [], treeName: fileName.replace(/\.ged(?:com)?$/i, '') || 'Импорт GEDCOM', description: '', lastModified: now, version: 1 };

@@ -200,7 +200,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
                 <div>
                   <h4 className="text-xs font-bold text-stone-900">Формат GEDCOM (.GED)</h4>
                   <p className="text-[11px] text-stone-500 mt-0.5 leading-snug">
-                    Мировой генеалогический стандарт (для MyHeritage, Gramps).
+                    GEDCOM 5.5.1 сохраняет людей и семьи. Медиа, биографии переносятся частично; нестандартные связи могут не поддерживаться другими программами.
                   </p>
                 </div>
               </button>

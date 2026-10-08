@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { importTreeFromGedcom, loadFamilyTree, normalizeTreeData, saveFamilyTree, validateImportedData } from './db';
+import { createGedcomContent, formatGedcomDate, importTreeFromGedcom, loadFamilyTree, normalizeTreeData, saveFamilyTree, validateImportedData } from './db';
 import type { FamilyTreeData, Person } from '../types/genealogy';
 import { INITIAL_DEMO_DATA } from '../data/demoFamily';
 
@@ -41,6 +41,41 @@ afterEach(() => {
 });
 
 describe('BackupService contract', () => {
+  it('exports deterministic GEDCOM families, links, adoption and valid dates', () => {
+    const persons = [
+      { ...validPerson('father'), firstName: 'Иван', birthDate: '1900-03-12' },
+      { ...validPerson('mother'), firstName: 'Анна', gender: 'female' as const },
+      { ...validPerson('child'), firstName: 'Пётр', birthDate: '1925-03' },
+      { ...validPerson('second-wife'), firstName: 'Мария', gender: 'female' as const },
+    ];
+    const data: FamilyTreeData = {
+      ...treeData,
+      persons,
+      relationships: [
+        { id: 'm1', person1Id: 'father', person2Id: 'mother', type: 'marriage', startDate: '1920-01-02' },
+        { id: 'm2', person1Id: 'father', person2Id: 'second-wife', type: 'marriage' },
+        { id: 'birth-parent', person1Id: 'father', person2Id: 'child', type: 'parent' },
+        { id: 'adopt', person1Id: 'mother', person2Id: 'child', type: 'adoptive-parent' },
+      ],
+    };
+    const gedcom = createGedcomContent(data, new Date('2024-02-03T00:00:00Z'));
+    expect(gedcom).toContain('2 VERS 5.5.1');
+    expect(gedcom).toContain('2 DATE 12 MAR 1900');
+    expect(gedcom).toContain('2 DATE MAR 1925');
+    expect(gedcom).toContain('1 MARR\n2 DATE 2 JAN 1920');
+    expect(gedcom.match(/ INDI/g)).toHaveLength(4);
+    expect(gedcom.match(/ FAM\n/g)).toHaveLength(2);
+    expect(gedcom).toContain('1 FAMS @F');
+    expect(gedcom).toContain('1 FAMC @F');
+    expect(gedcom).toContain('2 PEDI adopted');
+    expect(createGedcomContent(data, new Date('2024-02-03T00:00:00Z'))).toBe(gedcom);
+    const imported = importTreeFromGedcom(gedcom);
+    expect(imported?.persons).toHaveLength(4);
+    expect(imported?.relationships).toContainEqual(expect.objectContaining({ type: 'adoptive-parent' }));
+    expect(formatGedcomDate('1900-03-12')).toBe('12 MAR 1900');
+    expect(formatGedcomDate('1900-03')).toBe('MAR 1900');
+  });
+
   it('imports GEDCOM people, dates, notes and family relationships', () => {
     const imported = importTreeFromGedcom([
       '0 HEAD',
