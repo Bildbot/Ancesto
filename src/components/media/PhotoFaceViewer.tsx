@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Person, MediaItem, FaceTag, FaceBox } from '../../types/genealogy';
 import { formatFullName } from '../../utils/kinship';
+import { faceBoxToPixels, pointerToImagePercent, type ImageRect } from '../../utils/imageCoordinates';
 import { 
   detectFacesInPhoto, 
   collectKnownFaceReferences, 
@@ -54,6 +55,33 @@ export const PhotoFaceViewer: React.FC<PhotoFaceViewerProps> = ({
   const [showBoxes, setShowBoxes] = useState(true);
   const [isAddingManualBox, setIsAddingManualBox] = useState(false);
   const imageContainerRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [imageRect, setImageRect] = useState<ImageRect | null>(null);
+
+  useEffect(() => {
+    const container = imageContainerRef.current;
+    const image = imageRef.current;
+    if (!container || !image) return;
+    const updateRect = () => {
+      const containerBounds = container.getBoundingClientRect();
+      const imageBounds = image.getBoundingClientRect();
+      setImageRect({
+        left: imageBounds.left - containerBounds.left,
+        top: imageBounds.top - containerBounds.top,
+        width: imageBounds.width,
+        height: imageBounds.height,
+      });
+    };
+    updateRect();
+    const observer = new ResizeObserver(updateRect);
+    observer.observe(container);
+    observer.observe(image);
+    window.addEventListener('resize', updateRect);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateRect);
+    };
+  }, [media.dataUrl]);
 
   // Sync internal state with prop
   useEffect(() => {
@@ -202,9 +230,14 @@ export const PhotoFaceViewer: React.FC<PhotoFaceViewerProps> = ({
   const handleContainerClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isAddingManualBox || !imageContainerRef.current) return;
 
-    const rect = imageContainerRef.current.getBoundingClientRect();
-    const clickX = ((e.clientX - rect.left) / rect.width) * 100;
-    const clickY = ((e.clientY - rect.top) / rect.height) * 100;
+    if (!imageRect) return;
+    const containerBounds = imageContainerRef.current.getBoundingClientRect();
+    const point = pointerToImagePercent(e.clientX, e.clientY, {
+      ...imageRect,
+      left: imageRect.left + containerBounds.left,
+      top: imageRect.top + containerBounds.top,
+    });
+    if (!point) return;
 
     const boxW = 16; // default 16% width
     const boxH = 20; // default 20% height
@@ -213,8 +246,8 @@ export const PhotoFaceViewer: React.FC<PhotoFaceViewerProps> = ({
       id: `face-manual-${Date.now()}`,
       mediaId: media.id,
       box: {
-        x: Math.max(0, Math.min(100 - boxW, clickX - boxW / 2)),
-        y: Math.max(0, Math.min(100 - boxH, clickY - boxH / 2)),
+        x: Math.max(0, Math.min(100 - boxW, point.x - boxW / 2)),
+        y: Math.max(0, Math.min(100 - boxH, point.y - boxH / 2)),
         width: boxW,
         height: boxH
       },
@@ -322,13 +355,14 @@ export const PhotoFaceViewer: React.FC<PhotoFaceViewerProps> = ({
         }`}
       >
         <img
+          ref={imageRef}
           src={media.dataUrl}
           alt={media.name}
           className="max-h-[70vh] w-auto max-w-full object-contain pointer-events-none"
         />
 
         {/* Overlay Bounding Boxes */}
-        {showBoxes && faces.map((face) => {
+        {showBoxes && imageRect && faces.map((face) => {
           const isSelected = activeFaceId === face.id;
           const assignedPerson = allPersons.find((p) => p.id === face.personId);
           const suggestedPerson = allPersons.find((p) => p.id === face.suggestedPersonId);
@@ -348,6 +382,7 @@ export const PhotoFaceViewer: React.FC<PhotoFaceViewerProps> = ({
             borderColor = 'border-amber-300 ring-2 ring-amber-400/60 shadow-lg';
           }
 
+          const boxRect = faceBoxToPixels(face.box, imageRect);
           return (
             <div
               key={face.id}
@@ -356,10 +391,10 @@ export const PhotoFaceViewer: React.FC<PhotoFaceViewerProps> = ({
                 setActiveFaceId(isSelected ? null : face.id);
               }}
               style={{
-                left: `${face.box.x}%`,
-                top: `${face.box.y}%`,
-                width: `${face.box.width}%`,
-                height: `${face.box.height}%`
+                left: `${boxRect.left}px`,
+                top: `${boxRect.top}px`,
+                width: `${boxRect.width}px`,
+                height: `${boxRect.height}px`
               }}
               className={`absolute border-2 rounded-xl transition cursor-pointer pointer-events-auto ${borderColor} ${bgColor}`}
             >
