@@ -25,6 +25,79 @@ const RELATIONSHIP_TYPES = new Set([
   'custom',
 ]);
 
+const MEDIA_MIME_BY_EXTENSION: Record<string, string> = {
+  pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  txt: 'text/plain', mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav',
+  gif: 'image/gif', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+  mp4: 'video/mp4', webm: 'video/webm',
+};
+
+function decodeDataUrl(dataUrl: string): { mime: string; bytes: Uint8Array } | null {
+  const match = dataUrl.match(/^data:([^;,]+)?((?:;[^,]*)*),(.*)$/is);
+  if (!match) return null;
+  const mime = (match[1] || 'text/plain').toLowerCase();
+  const metadata = match[2] || '';
+  try {
+    const bytes = /;base64(?:;|$)/i.test(metadata)
+      ? Uint8Array.from(atob(match[3].replace(/\s/g, '')), (char) => char.charCodeAt(0))
+      : new TextEncoder().encode(decodeURIComponent(match[3]));
+    return { mime, bytes };
+  } catch {
+    return null;
+  }
+}
+
+function hasValidMediaSignature(mime: string, bytes: Uint8Array): boolean {
+  const starts = (...values: number[]) => values.every((value, index) => bytes[index] === value);
+  const ascii = (start: number, length: number) => String.fromCharCode(...bytes.slice(start, start + length));
+  switch (mime) {
+    case 'image/png': return starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
+    case 'image/jpeg': return starts(0xff, 0xd8, 0xff);
+    case 'image/gif': return ascii(0, 3) === 'GIF';
+    case 'image/webp': return ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP';
+    case 'application/pdf': return ascii(0, 5) === '%PDF-';
+    case 'audio/mpeg': return starts(0x49, 0x44, 0x33) || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0);
+    case 'audio/ogg': return ascii(0, 4) === 'OggS';
+    case 'audio/wav': return ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WAVE';
+    case 'video/webm': return starts(0x1a, 0x45, 0xdf, 0xa3);
+    case 'video/mp4': return ascii(4, 4) === 'ftyp';
+    case 'text/plain': return bytes.length > 0 && !bytes.includes(0);
+    // ZIP-based office documents are identified by their container signature.
+    case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': return starts(0x50, 0x4b, 0x03, 0x04);
+    // Legacy DOC is an OLE compound document.
+    case 'application/msword': return starts(0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1);
+    // The bundled demo uses static SVGs. Reject active content and external references.
+    case 'image/svg+xml': {
+      const svg = new TextDecoder().decode(bytes)
+        .replace(/xmlns="http:\/\/www\.w3\.org\/2000\/svg"/gi, '')
+        .replace(/url\(#[^)]+\)/gi, '');
+      return /^\s*<svg\b/i.test(svg) && /<\/svg>\s*$/i.test(svg)
+        && !/<script\b|<style\b|<foreignObject\b|<iframe\b|<image\b|<!DOCTYPE|<!ENTITY|\bon\w+\s*=|\b(?:xlink:)?href\s*=|javascript:|https?:|file:|data:|url\s*\(/i.test(svg);
+    }
+    default: return false;
+  }
+}
+
+function isValidMediaPayload(value: Record<string, unknown>): boolean {
+  const dataUrl = value.dataUrl as string;
+  // Empty payloads are only used by the intentionally payload-free localStorage fallback.
+  if (dataUrl === '') return true;
+  const decoded = decodeDataUrl(dataUrl);
+  if (!decoded || !hasValidMediaSignature(decoded.mime, decoded.bytes)) return false;
+  const declaredMime = value.mimeType;
+  if (declaredMime !== undefined && declaredMime !== decoded.mime) return false;
+  const name = value.name as string;
+  const extension = name.match(/\.([a-z0-9]{1,8})$/i)?.[1].toLowerCase();
+  if (extension
+    && (!MEDIA_MIME_BY_EXTENSION[extension] || MEDIA_MIME_BY_EXTENSION[extension] !== decoded.mime)) return false;
+  const permittedType = value.type === 'photo'
+    ? decoded.mime.startsWith('image/')
+    : value.type === 'document'
+      ? ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain', 'image/svg+xml'].includes(decoded.mime)
+      : value.type === 'audio' ? decoded.mime.startsWith('audio/') : decoded.mime.startsWith('video/');
+  return permittedType;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -62,7 +135,8 @@ function isValidMediaItem(value: unknown): boolean {
     return false;
   }
 
-  return isOptionalString(value.caption)
+  return isValidMediaPayload(value)
+    && isOptionalString(value.caption)
     && isOptionalString(value.date)
     && isOptionalString(value.mimeType)
     && isOptionalString(value.originPersonId)
@@ -102,6 +176,7 @@ function isValidPerson(value: unknown): boolean {
   ];
 
   return stringFields.every(isOptionalString)
+    && (value.avatarUrl === undefined || value.avatarUrl === '' || (typeof value.avatarUrl === 'string' && isValidMediaPayload({ dataUrl: value.avatarUrl, name: '', type: 'photo' })))
     && (value.avatarFaceBox === undefined || isValidFaceBox(value.avatarFaceBox))
     && value.tags.every((tag) => typeof tag === 'string')
     && value.mediaFiles.every(isValidMediaItem)

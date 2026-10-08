@@ -217,6 +217,30 @@ describe('BackupService contract', () => {
     expect(validateImportedData(backup)).toBeNull();
   });
 
+  it.each(['https://example.com/track.png', 'http://127.0.0.1/private', 'file:///etc/passwd', 'blob:https://example.com/id', 'javascript:alert(1)'])(
+    'rejects non-local media URL %s', (dataUrl) => {
+      expect(validateImportedData({ ...treeData, mediaArchive: [{ id: 'm', type: 'photo', name: 'photo.png', dataUrl }] })).toBeNull();
+    },
+  );
+
+  it('accepts a correctly signed local image payload', () => {
+    const backup = { ...treeData, mediaArchive: [{ id: 'm', type: 'photo', name: 'photo.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,iVBORw0KGgo=' }] };
+    expect(validateImportedData(backup)).not.toBeNull();
+  });
+
+  it('rejects MIME, extension and media category mismatches', () => {
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgo=';
+    expect(validateImportedData({ ...treeData, mediaArchive: [{ id: 'm', type: 'photo', name: 'photo.jpg', dataUrl }] })).toBeNull();
+    expect(validateImportedData({ ...treeData, mediaArchive: [{ id: 'm', type: 'photo', name: 'photo.png', mimeType: 'image/jpeg', dataUrl }] })).toBeNull();
+    expect(validateImportedData({ ...treeData, mediaArchive: [{ id: 'm', type: 'document', name: 'doc.pdf', dataUrl }] })).toBeNull();
+  });
+
+  it('rejects SVG active content and external resource references', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>';
+    const dataUrl = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    expect(validateImportedData({ ...treeData, mediaArchive: [{ id: 'm', type: 'photo', name: 'portrait', dataUrl }] })).toBeNull();
+  });
+
   it('rejects relationships with unsupported types', () => {
     const backup = {
       treeName: 'Повреждённый архив',
@@ -257,7 +281,7 @@ describe('BackupService contract', () => {
         id: 'photo-1',
         type: 'photo',
         name: 'Портрет',
-        dataUrl: 'data:image/jpeg;base64,AA==',
+        dataUrl: 'data:image/jpeg;base64,/9j/AA==',
         faceScanComplete: true,
         faces: [{
           id: 'face-1',
