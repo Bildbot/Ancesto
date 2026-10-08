@@ -7,5 +7,6 @@ test-results/
 .playwright-mcp/
 .DS_Store
 *.log
+Rodoslovnaya.exe
 .env*
 !.env.example
