@@ -36,7 +36,7 @@ import {
   LoaderCircle
 } from 'lucide-react';
 import { getPortraitFaceStyle } from '../modals/PersonDetailDrawer';
-import { readFileAsDataUrl, validateMediaFile } from '../../services/media';
+import { MEDIA_SIZE_LIMITS, isDesktopMediaRuntime, readFileAsDataUrl, validateMediaFile } from '../../services/media';
 
 interface ArchiveMediaViewProps {
   persons: Person[];
@@ -164,6 +164,10 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
   const processUploadedFiles = async (files: FileList | File[]) => {
     if (!files || files.length === 0 || isUploading) return;
     const fileList = Array.from(files);
+    const archiveLimit = isDesktopMediaRuntime() ? MEDIA_SIZE_LIMITS.desktop.archive : MEDIA_SIZE_LIMITS.web.archive;
+    const requestedBytes = fileList.reduce((total, file) => total + file.size, 0);
+    const currentMediaBytes = allMedia.reduce((total, item) => total + (item.size || 0), 0);
+    const projectedBytes = currentMediaBytes + requestedBytes;
     setUploadFiles(fileList.map((file, index) => ({
       id: `${index}-${file.name}-${file.lastModified}`,
       name: file.name,
@@ -174,6 +178,17 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
     setIsUploadProgressOpen(true);
     setIsUploading(true);
     setUploadError(null);
+
+    if (projectedBytes > archiveLimit) {
+      setUploadFiles(fileList.map((file, index) => ({
+        id: `${index}-${file.name}-${file.lastModified}`, name: file.name, size: file.size,
+        status: 'error', progress: 0,
+        error: `После добавления общий размер составит ${(projectedBytes / (1024 * 1024)).toFixed(1)} МБ, лимит архива — ${(archiveLimit / (1024 * 1024)).toFixed(0)} МБ.`,
+      })));
+      setUploadError(`После добавления общий размер составит ${(projectedBytes / (1024 * 1024)).toFixed(1)} МБ, допустимый размер архива — ${(archiveLimit / (1024 * 1024)).toFixed(0)} МБ.`);
+      setIsUploading(false);
+      return;
+    }
 
     const errors: string[] = [];
     const updateFile = (index: number, update: Partial<UploadFileState>) => {
@@ -232,6 +247,14 @@ export const ArchiveMediaView: React.FC<ArchiveMediaViewProps> = ({
           faces: detectedFaces,
           faceScanComplete
         };
+
+        const currentArchiveBytes = allMedia.reduce((total, item) => total + (item.size || 0), 0);
+        if (currentArchiveBytes + file.size > archiveLimit) {
+          const message = `Медиаархив достиг лимита: ${(currentArchiveBytes / (1024 * 1024)).toFixed(1)} МБ занято из ${(archiveLimit / (1024 * 1024)).toFixed(0)} МБ. Удалите файлы перед добавлением.`;
+          errors.push(`${file.name}: ${message}`);
+          updateFile(i, { status: 'error', error: message });
+          continue;
+        }
 
         updateFile(i, { status: 'saving' });
         try {

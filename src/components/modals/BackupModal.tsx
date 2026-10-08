@@ -73,7 +73,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
     setStatusMessage(null);
     if (!file) return;
     if (file.size > MAX_BACKUP_FILE_SIZE) {
-      setStatusMessage({ text: 'Размер резервной копии превышает допустимые 100 МБ.', type: 'error' });
+      setStatusMessage({ text: `Размер файла ${ (file.size / (1024 * 1024)).toFixed(1) } МБ превышает допустимые 100 МБ.`, type: 'error' });
       return;
     }
 
